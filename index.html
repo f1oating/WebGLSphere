@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sphere</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: #000;
+    display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  #container { position: relative; z-index: 4; }
+  canvas { cursor: grab; display: block; }
+  canvas:active { cursor: grabbing; }
+  #c { opacity: 0; transition: opacity 0.4s ease; }
+  #three-canvas {
+    position: fixed;
+    top: 0; left: 0;
+    pointer-events: none;
+    z-index: 1;
+  }
+</style>
+</head>
+<body>
+<canvas id="three-canvas"></canvas>
+<div id="container">
+  <canvas id="c"></canvas>
+</div>
+
+<script type="module">
+
+const canvas = document.getElementById('c');
+const SIZE = Math.min(window.innerWidth, window.innerHeight, Math.round(660 / 2.5));
+canvas.width  = SIZE;
+canvas.height = SIZE;
+
+const container = document.getElementById('container');
+container.style.width  = SIZE + 'px';
+container.style.height = SIZE + 'px';
+
+const gl = canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true, antialias: true });
+
+const vsSource = `
+  attribute vec2 a_pos;
+  attribute vec2 a_uv;
+  varying vec2 v_uv;
+  void main() {
+    gl_Position = vec4(a_pos, 0.0, 1.0);
+    v_uv = a_uv;
+  }
+`;
+
+const fsSource = `
+  precision highp float;
+  uniform sampler2D u_sprite;
+  uniform float u_f_exact;
+  uniform float u_rotX;
+  uniform float u_rotY;
+  uniform float u_time;
+  varying vec2 v_uv;
+
+  const float COLS      = 12.0;
+  const float ROWS      = 10.0;
+  const float TOTAL     = 120.0;
+  const float SPHERE_CX = 0.497;
+  const float SPHERE_CY = 0.497;
+  const float SPHERE_R  = 0.322;
+
+  vec4 sampleFrame(float fi, vec2 uv) {
+    fi = mod(fi, TOTAL);
+    float col = mod(fi, COLS);
+    float row = floor(fi / COLS);
+    float rowFlipped = (ROWS - 1.0) - row;
+    vec2 cell = (vec2(col, rowFlipped) + clamp(uv, 0.001, 0.999)) / vec2(COLS, ROWS);
+    return texture2D(u_sprite, cell);
+  }
+
+  vec4 sampleInterp(float fExact, vec2 uv) {
+    float f0    = floor(fExact);
+    float blend = fract(fExact);
+    blend = blend * blend * (3.0 - 2.0 * blend);
+    vec4 c0 = sampleFrame(f0,       uv);
+    vec4 c1 = sampleFrame(f0 + 1.0, uv);
+    return mix(c0, c1, blend);
+  }
+
+  void main() {
+    vec2 ndc   = v_uv * 2.0 - 1.0;
+    float dist = length(ndc);
+    if (dist > 1.0) discard;
+
+    float z   = sqrt(max(0.0, 1.0 - dist * dist));
+    vec3 N    = normalize(vec3(ndc, z));
+
+    vec3 L = normalize(vec3(-0.5, -0.6, 0.8));
+    float NdotL = max(dot(N, L), 0.0);
+    float wrap  = 0.35;
+    float diff  = (NdotL + wrap) / (1.0 + wrap);
+    float edgeDark = pow(max(z, 0.0), 0.45);
+
+    float VdotN  = z;
+    float fresnel = pow(1.0 - VdotN, 3.5);
+
+    float r2     = dist * dist;
+    float barrel = 1.0 - 0.08 * r2 - 0.05 * r2 * r2;
+    vec2  sph    = ndc * barrel;
+
+    vec2 uvBase = sph + vec2(u_rotY * 0.038, -u_rotX * 0.038);
+    vec2 uvFar  = sph + vec2(u_rotY * 0.018, -u_rotX * 0.018);
+
+    vec2 baseFrameUV = vec2(SPHERE_CX, SPHERE_CY) + uvBase * SPHERE_R;
+    vec2 farFrameUV  = vec2(SPHERE_CX, SPHERE_CY) + uvFar  * SPHERE_R;
+
+    vec4 colNear = sampleInterp(u_f_exact, baseFrameUV);
+    vec4 colFar  = sampleInterp(u_f_exact, farFrameUV);
+
+    float nearLum = dot(colNear.rgb, vec3(0.2126, 0.7152, 0.0722));
+    float layerBlend = smoothstep(0.05, 0.35, nearLum);
+    vec4 color = mix(colFar, colNear, layerBlend);
+
+    float aberr  = fresnel * 0.012;
+    vec2 aberrDir = ndc * aberr;
+    vec2 uvR = vec2(SPHERE_CX, SPHERE_CY) + (sph + aberrDir * u_rotY * 0.1 + aberrDir) * SPHERE_R;
+    vec2 uvB = vec2(SPHERE_CX, SPHERE_CY) + (sph - aberrDir * u_rotY * 0.1 - aberrDir) * SPHERE_R;
+    float rChan  = sampleInterp(u_f_exact, uvR).r;
+    float bChan  = sampleInterp(u_f_exact, uvB).b;
+    color.r = mix(color.r, rChan, 0.6 * fresnel);
+    color.b = mix(color.b, bChan, 0.6 * fresnel);
+
+    color.rgb *= mix(0.55, 1.0, diff) * mix(0.7, 1.0, edgeDark);
+
+    vec3 V = vec3(0.0, 0.0, 1.0);
+    vec3 H = normalize(L + V);
+    float spec = pow(max(dot(N, H), 0.0), 48.0) * 0.18;
+    color.rgb += spec * vec3(0.6, 1.0, 0.8);
+
+    vec3 rimColor = vec3(0.05, 0.28, 0.18) * 1.8;
+    color.rgb = mix(color.rgb, color.rgb + rimColor, fresnel * 0.55);
+
+    float haze = pow(fresnel, 1.5) * 0.15;
+    color.rgb += haze * vec3(0.02, 0.12, 0.08);
+
+    float mask = smoothstep(1.0, 0.975, dist);
+    color.a = mask;
+
+    gl_FragColor = color;
+  }
+`;
+
+function createShader(gl, type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    console.error('Shader:', gl.getShaderInfoLog(s));
+    return null;
+  }
+  return s;
+}
+
+const prog = gl.createProgram();
+gl.attachShader(prog, createShader(gl, gl.VERTEX_SHADER, vsSource));
+gl.attachShader(prog, createShader(gl, gl.FRAGMENT_SHADER, fsSource));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
+  console.error('Link:', gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+
+const verts = new Float32Array([-1,-1,0,1, 1,-1,1,1, -1,1,0,0, 1,1,1,0]);
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+const aPos = gl.getAttribLocation(prog, 'a_pos');
+const aUV  = gl.getAttribLocation(prog, 'a_uv');
+gl.enableVertexAttribArray(aPos);
+gl.enableVertexAttribArray(aUV);
+gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 16, 0);
+gl.vertexAttribPointer(aUV,  2, gl.FLOAT, false, 16, 8);
+
+const uFExact = gl.getUniformLocation(prog, 'u_f_exact');
+const uRotX   = gl.getUniformLocation(prog, 'u_rotX');
+const uRotY   = gl.getUniformLocation(prog, 'u_rotY');
+const uTime   = gl.getUniformLocation(prog, 'u_time');
+
+// ── Texture ───────────────────────────────────────────────────────────────────
+const tex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, tex);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0,15,8,255]));
+
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    if (document.querySelector(`script[src="${src}"]`)) { res(); return; }
+    const s = document.createElement('script');
+    s.src = src; s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+}
+
+async function loadKTX2(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const ab = await resp.arrayBuffer();
+
+  const MAGIC = [0xAB,0x4B,0x54,0x58,0x20,0x32,0x30,0xBB,0x0D,0x0A,0x1A,0x0A];
+  const bytes = new Uint8Array(ab);
+  for (let i = 0; i < 12; i++)
+    if (bytes[i] !== MAGIC[i]) throw new Error('Not a KTX2 file');
+
+  await loadScript('https://cdn.jsdelivr.net/npm/@loaders.gl/textures@3.4.15/dist/libs/basis_transcoder.js');
+
+  const BASIS = await window.BASIS({
+    locateFile: f => f.endsWith('.wasm')
+      ? 'https://cdn.jsdelivr.net/npm/@loaders.gl/textures@3.4.15/dist/libs/basis_transcoder.wasm'
+      : f
+  });
+  BASIS.initializeBasis();
+
+  const extETC2 = gl.getExtension('WEBGL_compressed_texture_etc');
+  const extS3TC = gl.getExtension('WEBGL_compressed_texture_s3tc');
+  const extASTC = gl.getExtension('WEBGL_compressed_texture_astc');
+
+  let basisFmt, glCompFmt;
+  if      (extETC2) { basisFmt = 1;  glCompFmt = extETC2.COMPRESSED_RGBA8_ETC2_EAC; }
+  else if (extS3TC) { basisFmt = 3;  glCompFmt = extS3TC.COMPRESSED_RGBA_S3TC_DXT5_EXT; }
+  else if (extASTC) { basisFmt = 10; glCompFmt = extASTC.COMPRESSED_RGBA_ASTC_4x4_KHR; }
+  else              { basisFmt = 13; glCompFmt = null; }
+
+  const ktx2 = new BASIS.KTX2File(new Uint8Array(ab));
+  if (!ktx2.isValid())          throw new Error('KTX2File.isValid() = false');
+  if (!ktx2.startTranscoding()) throw new Error('startTranscoding() failed');
+
+  const w = ktx2.getWidth();
+  const h = ktx2.getHeight();
+
+  let size = ktx2.getImageTranscodedSizeInBytes(0, 0, 0, basisFmt);
+  let data = new Uint8Array(size);
+  let ok   = ktx2.transcodeImage(data, 0, 0, 0, basisFmt, 0, -1, -1);
+
+  if (!ok && basisFmt !== 13) {
+    basisFmt = 13; glCompFmt = null;
+    size = ktx2.getImageTranscodedSizeInBytes(0, 0, 0, 13);
+    data = new Uint8Array(size);
+    ok   = ktx2.transcodeImage(data, 0, 0, 0, 13, 0, -1, -1);
+  }
+  if (!ok) throw new Error('transcodeImage failed');
+
+  ktx2.close(); ktx2.delete();
+
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  if (glCompFmt !== null) {
+    gl.compressedTexImage2D(gl.TEXTURE_2D, 0, glCompFmt, w, h, 0, data);
+  } else {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+  }
+
+  if (glCompFmt === null) {
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  } else {
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  }
+
+  const af = gl.getExtension('EXT_texture_filter_anisotropic') ||
+             gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic');
+  if (af) {
+    const max = gl.getParameter(af.MAX_TEXTURE_MAX_ANISOTROPY_EXT);
+    gl.texParameterf(gl.TEXTURE_2D, af.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(max, 8));
+  }
+
+  canvas.style.opacity = '1';
+}
+
+loadKTX2('sprite.ktx2').catch(e => console.error(e));
+
+// ── Interaction ───────────────────────────────────────────────────────────────
+let rotX = 0, rotY = 0, targetX = 0, targetY = 0;
+let dragging = false, lastX = 0, lastY = 0;
+
+const TOTAL_FRAMES = 120.0;
+const AUTO_SPEED   = 12.0;
+const MAX_SPEED    = 60.0;
+const FRICTION     = 0.90;
+
+let fPos   = 0.0;
+let fSpeed = AUTO_SPEED;
+
+const onDown = (cx, cy) => { dragging = true; lastX = cx; lastY = cy; };
+const onUp   = () => { dragging = false; };
+const onMove = (cx, cy) => {
+  if (!dragging) return;
+  const dx = cx - lastX;
+  const dy = cy - lastY;
+  fSpeed += dx * 0.6;
+  fSpeed  = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, fSpeed));
+  targetX += dy * 0.004;
+  lastX = cx; lastY = cy;
+};
+
+canvas.addEventListener('mousedown',  e => { onDown(e.clientX, e.clientY); e.preventDefault(); });
+canvas.addEventListener('touchstart', e => { onDown(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }, {passive:false});
+window.addEventListener('mouseup',    () => onUp());
+window.addEventListener('touchend',   () => onUp());
+window.addEventListener('mousemove',  e => onMove(e.clientX, e.clientY));
+window.addEventListener('touchmove',  e => { onMove(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }, {passive:false});
+
+// ── Three.js Spirals ──────────────────────────────────────────────────────────
+async function initThree() {
+  await loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js');
+
+  await new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js';
+    s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+
+  const threeCanvas = document.getElementById('three-canvas');
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  threeCanvas.width  = W;
+  threeCanvas.height = H;
+
+  const FOV  = 45;
+  const camZ = 3;
+  const scene  = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(FOV, W / H, 0.01, 100);
+  camera.position.set(0, 0, camZ);
+
+  const renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, alpha: true, antialias: true });
+  renderer.setSize(W, H);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.outputEncoding = THREE.sRGBEncoding;
+
+  // Lighting matching sphere shader
+  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+  const dirLight = new THREE.DirectionalLight(0x88ffcc, 1.2);
+  dirLight.position.set(-0.5, -0.6, 0.8);
+  scene.add(dirLight);
+
+  // ── Sphere top position in Three.js world space ──────────────────────────
+  //
+  // Three.js camera: FOV=45, z=3, aspect=W/H
+  //   worldHalfH at z=0 = tan(22.5°) * 3 ≈ 1.2426
+  //
+  // The WebGL sphere canvas is SIZE×SIZE pixels, centered on the W×H viewport.
+  // The sphere fills that canvas entirely (NDC radius = 1.0 in sphere-canvas space).
+  //
+  // In Three.js NDC, that sphere canvas spans:
+  //   ndc_radius_y = SIZE / H   (fraction of full screen height)
+  //
+  // → sphere world radius = worldHalfH * (SIZE / H)
+  // → sphere top Y        = +sphere_world_radius
+
+  const worldHalfH        = Math.tan((FOV / 2) * Math.PI / 180) * camZ;
+  const SPHERE_WORLD_R    = worldHalfH * (SIZE / H);
+
+  // Pivot: rotates in Y (spin) and X (tilt)
+  const pivotGroup = new THREE.Group();
+  scene.add(pivotGroup);
+
+  // Spiral group sits at the top of the sphere
+  const spiralGroup = new THREE.Group();
+  spiralGroup.position.y = SPHERE_WORLD_R - 0.1;
+  spiralGroup.scale.setScalar(0.15);
+  pivotGroup.add(spiralGroup);
+
+  const loader  = new THREE.GLTFLoader();
+  const loadGLB = path => new Promise((res, rej) => loader.load(path, g => res(g), undefined, rej));
+
+  // ── EDIT THESE to fix spiral orientation ─────────────────────────────────
+  // Euler angles in radians. Use Math.PI = 180°, Math.PI/2 = 90°
+  const SPIRAL_R_ROT = { x: 0, y: Math.PI / 2, z: 0 };
+  const SPIRAL_L_ROT = { x: 0, y: Math.PI / 2, z: 0 };
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const setupMesh = (mesh, rot) => {
+    mesh.rotation.set(rot.x, rot.y, rot.z);
+    spiralGroup.add(mesh);
+    // align bottom of mesh to y=0 after rotation
+    const box = new THREE.Box3().setFromObject(mesh);
+    mesh.position.y -= box.min.y;
+  };
+
+  try {
+    const [gltfR, gltfL] = await Promise.all([
+      loadGLB('spiral R.glb'),
+      loadGLB('spiral L.glb')
+    ]);
+
+    setupMesh(gltfR.scene, SPIRAL_R_ROT);
+    setupMesh(gltfL.scene, SPIRAL_L_ROT);
+
+    console.log(`Spirals OK | sphere world R = ${SPHERE_WORLD_R.toFixed(3)}`);
+  } catch (e) {
+    console.error('Spiral load error:', e);
+  }
+
+  let lastT = performance.now();
+
+  function renderThree(now) {
+    requestAnimationFrame(renderThree);
+    const dt = Math.min((now - lastT) / 1000, 0.05);
+    lastT = now;
+
+    // Match sphere spin: fSpeed frames/sec, 120 frames = full 2π rotation
+    pivotGroup.rotation.y += (fSpeed / 120) * Math.PI * 2 * dt;
+    // Smooth tilt sync
+    pivotGroup.rotation.x += (rotX * 0.5 - pivotGroup.rotation.x) * 0.08;
+
+    renderer.render(scene, camera);
+  }
+  requestAnimationFrame(renderThree);
+}
+
+initThree().catch(e => console.error('Three init error:', e));
+
+// ── WebGL Sphere Render Loop ──────────────────────────────────────────────────
+gl.enable(gl.BLEND);
+gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+let lastTime = performance.now();
+
+function render(now) {
+  requestAnimationFrame(render);
+  const dt = Math.min((now - lastTime) / 1000.0, 0.05);
+  lastTime = now;
+
+  rotX += (targetX - rotX) * 0.07;
+  rotY += (targetY - rotY) * 0.07;
+
+  if (!dragging) {
+    const excess = fSpeed - AUTO_SPEED;
+    fSpeed -= excess * (1.0 - FRICTION);
+  }
+
+  fPos += fSpeed * dt;
+
+  const N     = TOTAL_FRAMES - 1;
+  const cycle = 2 * N;
+  let p = ((fPos % cycle) + cycle) % cycle;
+  const fExact = p <= N ? p : cycle - p;
+
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+
+  gl.uniform1f(uFExact, fExact);
+  gl.uniform1f(uRotX,   Math.max(-1, Math.min(1, rotX * 3.5)));
+  gl.uniform1f(uRotY,   Math.max(-1, Math.min(1, rotY * 3.5)));
+  gl.uniform1f(uTime,   now / 1000.0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+requestAnimationFrame(render);
+
+</script>
+</body>
+</html>
