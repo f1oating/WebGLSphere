@@ -8,8 +8,7 @@
   html, body { width: 100%; height: 100%; background: #000;
     display: flex; align-items: center; justify-content: center; overflow: hidden; }
   #container { position: relative; z-index: 4; }
-  canvas { cursor: grab; display: block; }
-  canvas:active { cursor: grabbing; }
+  canvas { display: block; }
   #c { opacity: 0; transition: opacity 0.4s ease; }
   #three-canvas {
     position: fixed;
@@ -280,87 +279,79 @@ async function loadKTX2(url) {
 
 loadKTX2('sprite.ktx2').catch(e => console.error(e));
 
-// ── Interaction ───────────────────────────────────────────────────────────────
-let rotX = 0, rotY = 0, targetX = 0, targetY = 0;
-let dragging = false, lastX = 0, lastY = 0;
+// ── Transition state ──────────────────────────────────────────────────────────
+// transitionT animated 0→1 (particles) or 1→0 (spirals)
+let transitionT  = 0;
+let transitionTarget = 0;
+let cooldown = false;
 
+function go(dir) {
+  if (cooldown) return;
+  const next = dir === 'down' ? 1 : 0;
+  if (transitionTarget === next) return;
+  transitionTarget = next;
+  cooldown = true;
+  setTimeout(() => { cooldown = false; }, 700);
+}
+
+// Wheel
+window.addEventListener('wheel', e => {
+  if (e.deltaY > 10)       go('down');
+  else if (e.deltaY < -10) go('up');
+}, { passive: true });
+
+// Touch
+let touchY0 = 0;
+window.addEventListener('touchstart', e => { touchY0 = e.touches[0].clientY; }, { passive: true });
+window.addEventListener('touchend',   e => {
+  const dy = touchY0 - e.changedTouches[0].clientY;
+  if (dy >  30) go('down');
+  if (dy < -30) go('up');
+}, { passive: true });
+
+// ── Rotation / frames ─────────────────────────────────────────────────────────
 const TOTAL_FRAMES = 120.0;
-const AUTO_SPEED   = 12.0;
-const MAX_SPEED    = 60.0;
-const FRICTION     = 0.90;
-
 let fPos   = 0.0;
-let fSpeed = AUTO_SPEED;
-
-const onDown = (cx, cy) => { dragging = true; lastX = cx; lastY = cy; };
-const onUp   = () => { dragging = false; };
-const onMove = (cx, cy) => {
-  if (!dragging) return;
-  const dx = cx - lastX;
-  const dy = cy - lastY;
-  fSpeed += dx * 0.6;
-  fSpeed  = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, fSpeed));
-  targetX += dy * 0.004;
-  lastX = cx; lastY = cy;
-};
-
-canvas.addEventListener('mousedown',  e => { onDown(e.clientX, e.clientY); e.preventDefault(); });
-canvas.addEventListener('touchstart', e => { onDown(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }, {passive:false});
-window.addEventListener('mouseup',    () => onUp());
-window.addEventListener('touchend',   () => onUp());
-window.addEventListener('mousemove',  e => onMove(e.clientX, e.clientY));
-window.addEventListener('touchmove',  e => { onMove(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }, {passive:false});
+const fSpeed = 12.0;
 
 // ── Particle System ───────────────────────────────────────────────────────────
 const pCanvas = document.getElementById('particle-canvas');
-const pCtx = pCanvas.getContext('2d');
+const pCtx    = pCanvas.getContext('2d');
 
-function resizeParticleCanvas() {
+function resizePC() {
   pCanvas.width  = window.innerWidth;
   pCanvas.height = window.innerHeight;
 }
-resizeParticleCanvas();
-window.addEventListener('resize', resizeParticleCanvas);
+resizePC();
+window.addEventListener('resize', resizePC);
 
 const PARTICLE_COUNT = 180;
 const particles = [];
 
-function getSphereCenter() {
-  // Sphere canvas is centered on screen
-  return {
-    cx: window.innerWidth  / 2,
-    cy: window.innerHeight / 2,
-    r:  SIZE / 2
-  };
+function getSC() {
+  return { cx: window.innerWidth / 2, cy: window.innerHeight / 2, r: SIZE / 2 };
 }
 
 function spawnParticle() {
-  const { cx, cy, r } = getSphereCenter();
-  // spawn from the top of the sphere: narrow horizontal band, near the top edge
-  const spreadX = r * 0.8; // slightly narrower
-  const spawnX  = cx + (Math.random() - 0.5) * 2 * spreadX;
-  // spawn only within upper half of sphere
-  const spawnY  = cy - r * 0.1 + Math.random() * r * 0.4;
-
+  const { cx, cy, r } = getSC();
   return {
-    x:      spawnX,
-    y:      spawnY,
-    vx:     (Math.random() - 0.5) * 0.25,
-    vy:     -(0.65 + Math.random() * 0.45), // even faster upward
-    life:   0,
-    maxLife: 6.0 + Math.random() * 4.0,
-    size:   0.5 + Math.random() * 1.0,     // tiny: 0.5–1.5px
+    x: cx + (Math.random() - 0.5) * 2 * r * 0.8,
+    y: cy - r * 0.1 + Math.random() * r * 0.4,
+    vx: (Math.random() - 0.5) * 0.25,
+    vy: -(0.65 + Math.random() * 0.45),
+    life: 0,
+    maxLife: 6 + Math.random() * 4,
+    size: 0.5 + Math.random() * 1,
     spiralR: (Math.random() - 0.5) * 0.7,
-    angle:  Math.random() * Math.PI * 2,
+    angle: Math.random() * Math.PI * 2,
     angleSpeed: (Math.random() - 0.5) * 1.2,
     hue: 120 + Math.floor(Math.random() * 30),
   };
 }
 
-// init
 for (let i = 0; i < PARTICLE_COUNT; i++) {
   const p = spawnParticle();
-  p.life = Math.random() * p.maxLife; // stagger
+  p.life = Math.random() * p.maxLife;
   particles.push(p);
 }
 
@@ -370,64 +361,39 @@ function updateParticles(now) {
   const dt = Math.min((now - lastPTime) / 1000, 0.05);
   lastPTime = now;
 
-  const { cx, cy, r } = getSphereCenter();
+  // Smooth animate transitionT
+  transitionT += (transitionTarget - transitionT) * Math.min(dt * 4.5, 1);
+  const ease = transitionT * transitionT * (3 - 2 * transitionT);
+  const pAlpha = 1 - ease; // particles visible when ease=0
 
+  const { cx, cy, r } = getSC();
   pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
 
-  for (let i = 0; i < particles.length; i++) {
-    const p = particles[i];
-    p.life += dt;
+  if (pAlpha > 0.01) {
+    for (const p of particles) {
+      p.life += dt;
+      if (p.life >= p.maxLife) { Object.assign(p, spawnParticle()); continue; }
 
-    if (p.life >= p.maxLife) {
-      // respawn
-      Object.assign(p, spawnParticle());
-      continue;
+      const t = p.life / p.maxLife;
+      p.angle += p.angleSpeed * dt;
+      p.x += (p.vx + Math.sin(p.angle) * p.spiralR * (0.3 + t * 0.7)) * dt * 60;
+      p.y += p.vy * dt * 60;
+      p.x = Math.max(cx - r, Math.min(cx + r, p.x));
+
+      let a = t < 0.08 ? t / 0.08 : 1 - (t - 0.08) / 0.92;
+      a = Math.pow(Math.max(0, Math.min(1, a)), 1.1) * pAlpha;
+      const sz = p.size * (1 - t * 0.3);
+      if (sz < 0.05 || a < 0.01) continue;
+
+      const grd = pCtx.createRadialGradient(p.x, p.y, 0, p.x, p.y, sz * 3);
+      grd.addColorStop(0,   `hsla(${p.hue},100%,85%,${a})`);
+      grd.addColorStop(0.4, `hsla(${p.hue},100%,60%,${a * 0.6})`);
+      grd.addColorStop(1,   `hsla(${p.hue},100%,40%,0)`);
+      pCtx.beginPath(); pCtx.arc(p.x, p.y, sz * 3, 0, Math.PI * 2);
+      pCtx.fillStyle = grd; pCtx.fill();
+      pCtx.beginPath(); pCtx.arc(p.x, p.y, sz * 0.6, 0, Math.PI * 2);
+      pCtx.fillStyle = `hsla(${p.hue},80%,95%,${a})`; pCtx.fill();
     }
-
-    const t = p.life / p.maxLife; // 0 → 1
-
-    // spiral motion: oscillate x with increasing radius over time
-    p.angle += p.angleSpeed * dt;
-    const spiralDrift = Math.sin(p.angle) * p.spiralR * (0.3 + t * 0.7);
-
-    p.x += (p.vx + spiralDrift) * dt * 60;
-    p.y += p.vy * dt * 60;
-
-    // clamp x to sphere width
-    p.x = Math.max(cx - r, Math.min(cx + r, p.x));
-
-    // fade in quickly, then fade out very slowly
-    let alpha;
-    if (t < 0.08) {
-      alpha = t / 0.08;
-    } else {
-      alpha = 1.0 - ((t - 0.08) / 0.92);
-    }
-    alpha = Math.max(0, Math.min(1, alpha));
-    // gentler fade curve
-    alpha = Math.pow(alpha, 1.1);
-
-    // size shrinks very slowly — only 30% reduction over full life
-    const sz = p.size * (1.0 - t * 0.3);
-
-    if (sz < 0.05 || alpha < 0.01) continue;
-
-    // draw tiny glowing dot
-    const grd = pCtx.createRadialGradient(p.x, p.y, 0, p.x, p.y, sz * 3);
-    grd.addColorStop(0,   `hsla(${p.hue}, 100%, 85%, ${alpha})`);
-    grd.addColorStop(0.4, `hsla(${p.hue}, 100%, 60%, ${alpha * 0.6})`);
-    grd.addColorStop(1,   `hsla(${p.hue}, 100%, 40%, 0)`);
-
-    pCtx.beginPath();
-    pCtx.arc(p.x, p.y, sz * 3, 0, Math.PI * 2);
-    pCtx.fillStyle = grd;
-    pCtx.fill();
-
-    // tiny bright core
-    pCtx.beginPath();
-    pCtx.arc(p.x, p.y, sz * 0.6, 0, Math.PI * 2);
-    pCtx.fillStyle = `hsla(${p.hue}, 80%, 95%, ${alpha})`;
-    pCtx.fill();
   }
 
   requestAnimationFrame(updateParticles);
@@ -446,13 +412,10 @@ async function initThree() {
   });
 
   const threeCanvas = document.getElementById('three-canvas');
-  const W = window.innerWidth;
-  const H = window.innerHeight;
-  threeCanvas.width  = W;
-  threeCanvas.height = H;
+  const W = window.innerWidth, H = window.innerHeight;
+  threeCanvas.width = W; threeCanvas.height = H;
 
-  const FOV  = 45;
-  const camZ = 3;
+  const FOV = 45, camZ = 3;
   const scene  = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(FOV, W / H, 0.01, 100);
   camera.position.set(0, 0, camZ);
@@ -463,57 +426,72 @@ async function initThree() {
   renderer.outputEncoding = THREE.sRGBEncoding;
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-  const dirLight = new THREE.DirectionalLight(0x88ffcc, 1.2);
-  dirLight.position.set(-0.5, -0.6, 0.8);
-  scene.add(dirLight);
+  const dl = new THREE.DirectionalLight(0x88ffcc, 1.2);
+  dl.position.set(-0.5, -0.6, 0.8);
+  scene.add(dl);
 
   const worldHalfH     = Math.tan((FOV / 2) * Math.PI / 180) * camZ;
   const SPHERE_WORLD_R = worldHalfH * (SIZE / H);
 
-  const pivotGroup = new THREE.Group();
+  const pivotGroup  = new THREE.Group();
   scene.add(pivotGroup);
 
   const spiralGroup = new THREE.Group();
-  spiralGroup.position.y = SPHERE_WORLD_R - 0.1;
-  spiralGroup.scale.setScalar(0.15);
+  const REST_Y      = SPHERE_WORLD_R * 0.5;    // higher above sphere
+  const HIDDEN_Y    = worldHalfH * 3.0;         // well above screen
+  spiralGroup.position.y = HIDDEN_Y;            // start hidden
+  spiralGroup.scale.setScalar(0.10);
   pivotGroup.add(spiralGroup);
 
-  const loader  = new THREE.GLTFLoader();
-  const loadGLB = path => new Promise((res, rej) => loader.load(path, g => res(g), undefined, rej));
+  const spiralMats = [];
 
-  const SPIRAL_R_ROT = { x: 0, y: Math.PI / 2, z: 0 };
-  const SPIRAL_L_ROT = { x: 0, y: Math.PI / 2, z: 0 };
+  const loader  = new THREE.GLTFLoader();
+  const loadGLB = p => new Promise((res, rej) => loader.load(p, g => res(g), undefined, rej));
 
   const setupMesh = (mesh, rot) => {
     mesh.rotation.set(rot.x, rot.y, rot.z);
+    mesh.traverse(child => {
+      if (child.isMesh && child.material) {
+        child.material = child.material.clone();
+        child.material.transparent = true;
+        child.material.opacity = 0;
+        spiralMats.push(child.material);
+      }
+    });
     spiralGroup.add(mesh);
     const box = new THREE.Box3().setFromObject(mesh);
     mesh.position.y -= box.min.y;
   };
 
   try {
-    const [gltfR, gltfL] = await Promise.all([
-      loadGLB('spiral R.glb'),
-      loadGLB('spiral L.glb')
-    ]);
-
-    setupMesh(gltfR.scene, SPIRAL_R_ROT);
-    setupMesh(gltfL.scene, SPIRAL_L_ROT);
-
-    console.log(`Spirals OK | sphere world R = ${SPHERE_WORLD_R.toFixed(3)}`);
+    const [gR, gL] = await Promise.all([loadGLB('spiral R.glb'), loadGLB('spiral L.glb')]);
+    setupMesh(gR.scene, { x: 0, y: Math.PI / 2, z: 0 });
+    setupMesh(gL.scene, { x: 0, y: Math.PI / 2, z: 0 });
   } catch (e) {
     console.error('Spiral load error:', e);
   }
 
   let lastT = performance.now();
+  const ROT_SPEED = 0.8; // slow, calm rotation
 
   function renderThree(now) {
     requestAnimationFrame(renderThree);
     const dt = Math.min((now - lastT) / 1000, 0.05);
     lastT = now;
 
-    pivotGroup.rotation.y += (fSpeed / 120) * Math.PI * 2 * dt;
-    pivotGroup.rotation.x += (rotX * 0.5 - pivotGroup.rotation.x) * 0.08;
+    // Use the same transitionT that particles use (already smoothed)
+    const ease = transitionT * transitionT * (3 - 2 * transitionT);
+
+    // Slide from HIDDEN_Y → REST_Y as ease goes 0→1
+    // Also follow sphere drop (80px converted to world units)
+    const dropWorldUnits = (40 / H) * worldHalfH * 2;
+    spiralGroup.position.y = HIDDEN_Y + (REST_Y - dropWorldUnits - HIDDEN_Y) * ease;
+
+    // Fade in
+    for (const m of spiralMats) m.opacity = ease;
+
+    // Spin always (looks alive)
+    pivotGroup.rotation.y += ROT_SPEED * dt;
 
     renderer.render(scene, camera);
   }
@@ -521,6 +499,9 @@ async function initThree() {
 }
 
 initThree().catch(e => console.error('Three init error:', e));
+
+// ── Sphere drop on scroll ─────────────────────────────────────────────────────
+const SPHERE_DROP_PX = 70; // how far down sphere moves (px)
 
 // ── WebGL Sphere Render Loop ──────────────────────────────────────────────────
 gl.enable(gl.BLEND);
@@ -530,32 +511,25 @@ let lastTime = performance.now();
 
 function render(now) {
   requestAnimationFrame(render);
-  const dt = Math.min((now - lastTime) / 1000.0, 0.05);
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
 
-  rotX += (targetX - rotX) * 0.07;
-  rotY += (targetY - rotY) * 0.07;
-
-  if (!dragging) {
-    const excess = fSpeed - AUTO_SPEED;
-    fSpeed -= excess * (1.0 - FRICTION);
-  }
-
   fPos += fSpeed * dt;
-
-  const N     = TOTAL_FRAMES - 1;
-  const cycle = 2 * N;
+  const N = TOTAL_FRAMES - 1, cycle = 2 * N;
   let p = ((fPos % cycle) + cycle) % cycle;
   const fExact = p <= N ? p : cycle - p;
+
+  // Sphere drop
+  const dropEase = transitionT * transitionT * (3 - 2 * transitionT);
+  container.style.transform = `translateY(${dropEase * SPHERE_DROP_PX}px)`;
 
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.clearColor(0, 0, 0, 0);
   gl.clear(gl.COLOR_BUFFER_BIT);
-
   gl.uniform1f(uFExact, fExact);
-  gl.uniform1f(uRotX,   Math.max(-1, Math.min(1, rotX * 3.5)));
-  gl.uniform1f(uRotY,   Math.max(-1, Math.min(1, rotY * 3.5)));
-  gl.uniform1f(uTime,   now / 1000.0);
+  gl.uniform1f(uRotX,   0.0);
+  gl.uniform1f(uRotY,   0.0);
+  gl.uniform1f(uTime,   now / 1000);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
 requestAnimationFrame(render);
