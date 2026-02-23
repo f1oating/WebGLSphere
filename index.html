@@ -373,17 +373,16 @@ function curlY(x, y, t) {
 }
 
 function makeStormParticle(extraDepth) {
-  // extraDepth: extra px below screen — staggered so wave rises bottom→top
   const W = window.innerWidth, H = window.innerHeight;
   return {
     x:       Math.random() * W,
     y:       H + 20 + (extraDepth || 0),
     baseVx:  (Math.random() - 0.5) * 0.10,
-    baseVy:  -(0.22 + Math.random() * 0.28),  // rise speed ~0.22–0.50 screen/s
-    curlStr: 0.8 + Math.random() * 1.4,        // strong turbulence = swirl/storm
+    baseVy:  -(0.22 + Math.random() * 0.28),
+    curlStr: 0.8 + Math.random() * 1.4,
     tOff:    Math.random() * 80,
     life:    0,
-    maxLife: 22 + Math.random() * 16,           // long life — persist across screen
+    maxLife: 22 + Math.random() * 16,
     size:    0.5 + Math.random() * 2.2,
     hue:     randHue(),
     twinkle: Math.random() * Math.PI * 2,
@@ -403,8 +402,6 @@ function triggerBurst() {
   const H = window.innerHeight;
   for (let i = 0; i < stormPool.length; i++) {
     const p = stormPool[i];
-    // Spread initial depths — wave front rises from bottom to top over ~3-4 sec
-    // extraDepth 0 = at bottom now, H*1.8 = appears ~3-4s later
     const extraDepth = Math.random() * H * 1.8;
     Object.assign(p, makeStormParticle(extraDepth));
     p.active = true;
@@ -418,12 +415,10 @@ function updateParticles(now) {
   lastPTime = now;
   stormTime += dt;
 
-  // Smooth animate transitionT
   transitionT += (transitionTarget - transitionT) * Math.min(dt * 4.5, 1);
   const ease   = transitionT * transitionT * (3 - 2 * transitionT);
   const pAlpha = 1 - ease;
 
-  // Detect scroll-down to fire storm
   if (transitionTarget === 1 && prevTransTarget2 === 0) {
     triggerBurst();
     burstActive = true;
@@ -437,7 +432,6 @@ function updateParticles(now) {
   const W = window.innerWidth, H = window.innerHeight;
   pCtx.clearRect(0, 0, W, H);
 
-  // ── Original particles above sphere (untouched) ───────────────────────────
   if (pAlpha > 0.01) {
     for (const p of particles) {
       p.life += dt;
@@ -465,13 +459,11 @@ function updateParticles(now) {
     }
   }
 
-  // ── Storm / turbulence particles (second screen) ───────────────────────────
   for (const p of stormPool) {
     if (!p.active) continue;
 
     p.life += dt;
     if (p.life >= p.maxLife) {
-      // Respawn from bottom again — continuous rising wave
       Object.assign(p, makeStormParticle(0));
       p.active = true;
       continue;
@@ -479,7 +471,6 @@ function updateParticles(now) {
 
     p.twinkle += p.twinkleSpd * dt;
 
-    // Curl noise velocity — gives the swirling storm look
     const t2 = stormTime + p.tOff;
     const cx2 = curlX(p.x, p.y, t2) * p.curlStr;
     const cy2 = curlY(p.x, p.y, t2) * p.curlStr;
@@ -487,7 +478,6 @@ function updateParticles(now) {
     p.x += (p.baseVx + cx2) * dt * 60;
     p.y += (p.baseVy + cy2) * dt * 60;
 
-    // Wrap all edges — particles cover full screen eventually
     if (p.x < -30) p.x = W + 30;
     if (p.x > W + 30) p.x = -30;
     if (p.y < -30) p.y = H + 30;
@@ -557,40 +547,56 @@ async function initThree() {
   const worldHalfH     = Math.tan((FOV / 2) * Math.PI / 180) * camZ;
   const SPHERE_WORLD_R = worldHalfH * (SIZE / H);
 
-  const pivotGroup  = new THREE.Group();
-  scene.add(pivotGroup);
+  // ── Two separate pivot groups for independent rotation ────────────────────
+  const pivotR = new THREE.Group();
+  const pivotL = new THREE.Group();
+  scene.add(pivotR);
+  scene.add(pivotL);
 
-  const spiralGroup = new THREE.Group();
-  const REST_Y      = SPHERE_WORLD_R * 0.5;
-  const HIDDEN_Y    = worldHalfH * 3.0;
-  spiralGroup.position.y = HIDDEN_Y;
-  spiralGroup.scale.setScalar(0.10);
-  pivotGroup.add(spiralGroup);
+  const spiralGroupR = new THREE.Group();
+  const spiralGroupL = new THREE.Group();
 
-  const spiralMats = [];
+  const REST_Y   = SPHERE_WORLD_R * 0.5;
+  const HIDDEN_Y = worldHalfH * 3.0;
+
+  spiralGroupR.position.y = HIDDEN_Y;
+  spiralGroupR.scale.setScalar(0.10);
+  pivotR.add(spiralGroupR);
+
+  spiralGroupL.position.y = HIDDEN_Y;
+  spiralGroupL.scale.setScalar(0.10);
+  pivotL.add(spiralGroupL);
+
+  const spiralMatsR = [];
+  const spiralMatsL = [];
 
   const loader  = new THREE.GLTFLoader();
   const loadGLB = p => new Promise((res, rej) => loader.load(p, g => res(g), undefined, rej));
 
-  const setupMesh = (mesh, rot) => {
+  const setupMesh = (mesh, rot, group, matsArr) => {
     mesh.rotation.set(rot.x, rot.y, rot.z);
     mesh.traverse(child => {
       if (child.isMesh && child.material) {
         child.material = child.material.clone();
         child.material.transparent = true;
         child.material.opacity = 0;
-        spiralMats.push(child.material);
+        matsArr.push(child.material);
       }
     });
-    spiralGroup.add(mesh);
+    group.add(mesh);
     const box = new THREE.Box3().setFromObject(mesh);
     mesh.position.y -= box.min.y;
   };
 
   try {
     const [gR, gL] = await Promise.all([loadGLB('spiral R.glb'), loadGLB('spiral L.glb')]);
-    setupMesh(gR.scene, { x: 0, y: Math.PI / 2, z: 0 });
-    setupMesh(gL.scene, { x: 0, y: Math.PI / 2, z: 0 });
+
+    // Right spiral → pivotR
+    setupMesh(gR.scene, { x: 0, y: Math.PI / 2, z: 0 }, spiralGroupR, spiralMatsR);
+
+    // Left spiral (mirrored) → pivotL
+    gL.scene.scale.x = -1;
+    setupMesh(gL.scene, { x: 0, y: Math.PI / 2, z: 0 }, spiralGroupL, spiralMatsL);
   } catch (e) {
     console.error('Spiral load error:', e);
   }
@@ -605,10 +611,20 @@ async function initThree() {
 
     const ease = transitionT * transitionT * (3 - 2 * transitionT);
     const dropWorldUnits = (40 / H) * worldHalfH * 2;
-    spiralGroup.position.y = HIDDEN_Y + (REST_Y - dropWorldUnits - HIDDEN_Y) * ease;
+    const targetY = HIDDEN_Y + (REST_Y - dropWorldUnits - HIDDEN_Y) * ease;
 
-    for (const m of spiralMats) m.opacity = ease;
-    pivotGroup.rotation.y += ROT_SPEED * dt;
+    spiralGroupR.position.y = targetY;
+    spiralGroupL.position.y = targetY;
+
+    for (const m of spiralMatsR) m.opacity = ease;
+    for (const m of spiralMatsL) m.opacity = ease;
+
+    // Rotate in opposite directions
+    // gL has scale.x = -1, so to make it visually counter-rotate,
+    // we rotate pivotL in the SAME direction — the mirror flip inverts the visual spin.
+    // Net result: right spiral goes one way, left spiral goes the other way visually.
+    pivotR.rotation.y -= ROT_SPEED * dt;
+    pivotL.rotation.y += ROT_SPEED * dt; // same angle but mirror makes it look opposite
 
     renderer.render(scene, camera);
   }
