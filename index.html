@@ -280,7 +280,6 @@ async function loadKTX2(url) {
 loadKTX2('sprite.ktx2').catch(e => console.error(e));
 
 // ── Transition state ──────────────────────────────────────────────────────────
-// transitionT animated 0→1 (particles) or 1→0 (spirals)
 let transitionT  = 0;
 let transitionTarget = 0;
 let cooldown = false;
@@ -294,13 +293,11 @@ function go(dir) {
   setTimeout(() => { cooldown = false; }, 700);
 }
 
-// Wheel
 window.addEventListener('wheel', e => {
   if (e.deltaY > 10)       go('down');
   else if (e.deltaY < -10) go('up');
 }, { passive: true });
 
-// Touch
 let touchY0 = 0;
 window.addEventListener('touchstart', e => { touchY0 = e.touches[0].clientY; }, { passive: true });
 window.addEventListener('touchend',   e => {
@@ -355,20 +352,92 @@ for (let i = 0; i < PARTICLE_COUNT; i++) {
   particles.push(p);
 }
 
+// ── Storm particles (second screen — turbulent swirling cloud like video) ──────
+const STORM_COUNT = 420;
+const stormPool   = [];
+
+function randHue() { return 105 + Math.random() * 40; }
+
+// 2D curl-noise: layered sine fields for organic turbulence
+function curlX(x, y, t) {
+  return Math.cos(x * 0.008 + t * 0.28) * 0.7
+       + Math.sin(y * 0.012 - t * 0.17) * 0.5
+       + Math.cos((x + y) * 0.005 + t * 0.22) * 0.35
+       + Math.sin(x * 0.02  - y * 0.007 + t * 0.41) * 0.25;
+}
+function curlY(x, y, t) {
+  return Math.sin(x * 0.010 - t * 0.19) * 0.7
+       + Math.cos(y * 0.007 + t * 0.31) * 0.5
+       + Math.sin((x - y) * 0.006 - t * 0.25) * 0.35
+       + Math.cos(x * 0.015 + y * 0.009 - t * 0.38) * 0.25;
+}
+
+function makeStormParticle(extraDepth) {
+  // extraDepth: extra px below screen — staggered so wave rises bottom→top
+  const W = window.innerWidth, H = window.innerHeight;
+  return {
+    x:       Math.random() * W,
+    y:       H + 20 + (extraDepth || 0),
+    baseVx:  (Math.random() - 0.5) * 0.10,
+    baseVy:  -(0.22 + Math.random() * 0.28),  // rise speed ~0.22–0.50 screen/s
+    curlStr: 0.8 + Math.random() * 1.4,        // strong turbulence = swirl/storm
+    tOff:    Math.random() * 80,
+    life:    0,
+    maxLife: 22 + Math.random() * 16,           // long life — persist across screen
+    size:    0.5 + Math.random() * 2.2,
+    hue:     randHue(),
+    twinkle: Math.random() * Math.PI * 2,
+    twinkleSpd: 1.0 + Math.random() * 2.5,
+    active:  false,
+  };
+}
+
+for (let i = 0; i < STORM_COUNT; i++) stormPool.push(makeStormParticle(0));
+
+let burstActive      = false;
+let prevTransTarget2 = 0;
+let stormTime        = 0;
+
+function triggerBurst() {
+  stormTime = 0;
+  const H = window.innerHeight;
+  for (let i = 0; i < stormPool.length; i++) {
+    const p = stormPool[i];
+    // Spread initial depths — wave front rises from bottom to top over ~3-4 sec
+    // extraDepth 0 = at bottom now, H*1.8 = appears ~3-4s later
+    const extraDepth = Math.random() * H * 1.8;
+    Object.assign(p, makeStormParticle(extraDepth));
+    p.active = true;
+  }
+}
+
 let lastPTime = performance.now();
 
 function updateParticles(now) {
   const dt = Math.min((now - lastPTime) / 1000, 0.05);
   lastPTime = now;
+  stormTime += dt;
 
   // Smooth animate transitionT
   transitionT += (transitionTarget - transitionT) * Math.min(dt * 4.5, 1);
-  const ease = transitionT * transitionT * (3 - 2 * transitionT);
-  const pAlpha = 1 - ease; // particles visible when ease=0
+  const ease   = transitionT * transitionT * (3 - 2 * transitionT);
+  const pAlpha = 1 - ease;
 
-  const { cx, cy, r } = getSC();
-  pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
+  // Detect scroll-down to fire storm
+  if (transitionTarget === 1 && prevTransTarget2 === 0) {
+    triggerBurst();
+    burstActive = true;
+  }
+  if (transitionTarget === 0 && prevTransTarget2 === 1) {
+    burstActive = false;
+    for (const p of stormPool) p.active = false;
+  }
+  prevTransTarget2 = transitionTarget;
 
+  const W = window.innerWidth, H = window.innerHeight;
+  pCtx.clearRect(0, 0, W, H);
+
+  // ── Original particles above sphere (untouched) ───────────────────────────
   if (pAlpha > 0.01) {
     for (const p of particles) {
       p.life += dt;
@@ -378,7 +447,7 @@ function updateParticles(now) {
       p.angle += p.angleSpeed * dt;
       p.x += (p.vx + Math.sin(p.angle) * p.spiralR * (0.3 + t * 0.7)) * dt * 60;
       p.y += p.vy * dt * 60;
-      p.x = Math.max(cx - r, Math.min(cx + r, p.x));
+      p.x = Math.max(getSC().cx - getSC().r, Math.min(getSC().cx + getSC().r, p.x));
 
       let a = t < 0.08 ? t / 0.08 : 1 - (t - 0.08) / 0.92;
       a = Math.pow(Math.max(0, Math.min(1, a)), 1.1) * pAlpha;
@@ -394,6 +463,61 @@ function updateParticles(now) {
       pCtx.beginPath(); pCtx.arc(p.x, p.y, sz * 0.6, 0, Math.PI * 2);
       pCtx.fillStyle = `hsla(${p.hue},80%,95%,${a})`; pCtx.fill();
     }
+  }
+
+  // ── Storm / turbulence particles (second screen) ───────────────────────────
+  for (const p of stormPool) {
+    if (!p.active) continue;
+
+    p.life += dt;
+    if (p.life >= p.maxLife) {
+      // Respawn from bottom again — continuous rising wave
+      Object.assign(p, makeStormParticle(0));
+      p.active = true;
+      continue;
+    }
+
+    p.twinkle += p.twinkleSpd * dt;
+
+    // Curl noise velocity — gives the swirling storm look
+    const t2 = stormTime + p.tOff;
+    const cx2 = curlX(p.x, p.y, t2) * p.curlStr;
+    const cy2 = curlY(p.x, p.y, t2) * p.curlStr;
+
+    p.x += (p.baseVx + cx2) * dt * 60;
+    p.y += (p.baseVy + cy2) * dt * 60;
+
+    // Wrap all edges — particles cover full screen eventually
+    if (p.x < -30) p.x = W + 30;
+    if (p.x > W + 30) p.x = -30;
+    if (p.y < -30) p.y = H + 30;
+    if (p.y > H + 30) { Object.assign(p, makeStormParticle(0)); p.active = true; continue; }
+
+    const t = p.life / p.maxLife;
+    let alpha = t < 0.08 ? t / 0.08 : (t < 0.82 ? 1.0 : 1.0 - (t - 0.82) / 0.18);
+    alpha = Math.max(0, alpha);
+
+    const flicker = 0.5 + 0.5 * Math.sin(p.twinkle);
+    const fa = alpha * flicker * ease;
+
+    if (fa < 0.01) continue;
+
+    const sz = p.size;
+
+    const grd = pCtx.createRadialGradient(p.x, p.y, 0, p.x, p.y, sz * 5);
+    grd.addColorStop(0,   `hsla(${p.hue},100%,78%,${fa * 0.9})`);
+    grd.addColorStop(0.3, `hsla(${p.hue},100%,55%,${fa * 0.45})`);
+    grd.addColorStop(0.7, `hsla(${p.hue},100%,30%,${fa * 0.12})`);
+    grd.addColorStop(1,   `hsla(${p.hue},100%,20%,0)`);
+    pCtx.beginPath();
+    pCtx.arc(p.x, p.y, sz * 5, 0, Math.PI * 2);
+    pCtx.fillStyle = grd;
+    pCtx.fill();
+
+    pCtx.beginPath();
+    pCtx.arc(p.x, p.y, sz * 0.55, 0, Math.PI * 2);
+    pCtx.fillStyle = `hsla(${p.hue},60%,97%,${fa})`;
+    pCtx.fill();
   }
 
   requestAnimationFrame(updateParticles);
@@ -437,9 +561,9 @@ async function initThree() {
   scene.add(pivotGroup);
 
   const spiralGroup = new THREE.Group();
-  const REST_Y      = SPHERE_WORLD_R * 0.5;    // higher above sphere
-  const HIDDEN_Y    = worldHalfH * 3.0;         // well above screen
-  spiralGroup.position.y = HIDDEN_Y;            // start hidden
+  const REST_Y      = SPHERE_WORLD_R * 0.5;
+  const HIDDEN_Y    = worldHalfH * 3.0;
+  spiralGroup.position.y = HIDDEN_Y;
   spiralGroup.scale.setScalar(0.10);
   pivotGroup.add(spiralGroup);
 
@@ -472,25 +596,18 @@ async function initThree() {
   }
 
   let lastT = performance.now();
-  const ROT_SPEED = 0.8; // slow, calm rotation
+  const ROT_SPEED = 0.8;
 
   function renderThree(now) {
     requestAnimationFrame(renderThree);
     const dt = Math.min((now - lastT) / 1000, 0.05);
     lastT = now;
 
-    // Use the same transitionT that particles use (already smoothed)
     const ease = transitionT * transitionT * (3 - 2 * transitionT);
-
-    // Slide from HIDDEN_Y → REST_Y as ease goes 0→1
-    // Also follow sphere drop (80px converted to world units)
     const dropWorldUnits = (40 / H) * worldHalfH * 2;
     spiralGroup.position.y = HIDDEN_Y + (REST_Y - dropWorldUnits - HIDDEN_Y) * ease;
 
-    // Fade in
     for (const m of spiralMats) m.opacity = ease;
-
-    // Spin always (looks alive)
     pivotGroup.rotation.y += ROT_SPEED * dt;
 
     renderer.render(scene, camera);
@@ -501,7 +618,7 @@ async function initThree() {
 initThree().catch(e => console.error('Three init error:', e));
 
 // ── Sphere drop on scroll ─────────────────────────────────────────────────────
-const SPHERE_DROP_PX = 70; // how far down sphere moves (px)
+const SPHERE_DROP_PX = 70;
 
 // ── WebGL Sphere Render Loop ──────────────────────────────────────────────────
 gl.enable(gl.BLEND);
@@ -519,7 +636,6 @@ function render(now) {
   let p = ((fPos % cycle) + cycle) % cycle;
   const fExact = p <= N ? p : cycle - p;
 
-  // Sphere drop
   const dropEase = transitionT * transitionT * (3 - 2 * transitionT);
   container.style.transform = `translateY(${dropEase * SPHERE_DROP_PX}px)`;
 
