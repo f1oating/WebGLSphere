@@ -22,8 +22,6 @@
     pointer-events: none;
     z-index: 3;
   }
-
-
 </style>
 </head>
 <body>
@@ -32,8 +30,6 @@
 <div id="container">
   <canvas id="c"></canvas>
 </div>
-
-
 
 <script type="module">
 
@@ -283,10 +279,9 @@ async function loadKTX2(url) {
 
 loadKTX2('sprite.ktx2').catch(e => console.error(e));
 
-// ── Transition state ──────────────────────────────────────────────────────────
-let transitionT  = 0;
+let transitionT      = 0;
 let transitionTarget = 0;
-let cooldown = false;
+let cooldown         = false;
 
 function go(dir) {
   if (cooldown) return;
@@ -310,12 +305,10 @@ window.addEventListener('touchend',   e => {
   if (dy < -30) go('up');
 }, { passive: true });
 
-// ── Rotation / frames ─────────────────────────────────────────────────────────
 const TOTAL_FRAMES = 120.0;
 let fPos   = 0.0;
 const fSpeed = 12.0;
 
-// ── Particle System (screen 1) ────────────────────────────────────────────────
 const pCanvas = document.getElementById('particle-canvas');
 const pCtx    = pCanvas.getContext('2d');
 
@@ -356,124 +349,305 @@ for (let i = 0; i < PARTICLE_COUNT; i++) {
   particles.push(p);
 }
 
-// ── Storm Swarm System ────────────────────────────────────────────────────────
-const SWARM_COUNT = 14;
-const SWARM_SIZE  = 80;
+const RING_COUNTS = [72, 56, 40, 22];
+const RING_SCALES = [1.00, 0.78, 0.55, 0.32];
+const FTOTAL = RING_COUNTS.reduce((a, b) => a + b, 0);
 
-const swarms         = [];
-const stormParticles = [];
-let stormTime        = 0;
-let burstActive      = false;
-let prevTransTarget2 = 0;
+const fpx        = new Float32Array(FTOTAL);
+const fpy        = new Float32Array(FTOTAL);
+const fpvx       = new Float32Array(FTOTAL);
+const fpvy       = new Float32Array(FTOTAL);
+const fpage      = new Float32Array(FTOTAL);
+const fpmaxAge   = new Float32Array(FTOTAL);
+const fpNoise    = new Float32Array(FTOTAL);
+const fpSize     = new Float32Array(FTOTAL);
+const fpColorIdx = new Uint8Array(FTOTAL);
+const fpRing     = new Uint8Array(FTOTAL);
+const fpTheta    = new Float32Array(FTOTAL);
 
-let DISC_CX, DISC_CY;
-const DISC_R    = 0;
-const TILT      = 0.38;
+const FLUID_BUOYANCY      = 0.0016;
+const FLUID_VORTEX_STR    = 0.038;
+const FLUID_CORE_FRAC     = 0.48;
+const FLUID_VISCOSITY     = 0.9855;
+const FLUID_TURB_STR      = 0.006;
+const FLUID_TURB_FREQ     = 0.013;
+const LIFETIME_BASE_F     = 280;
+const LIFETIME_RAND_F     = 160;
 
-function project3D(angle, radius, riseY, W, H) {
-  const x3 = Math.cos(angle) * radius;
-  const z3 = Math.sin(angle) * radius;
-  const perspScale = 1.0 + z3 * 0.0012;
-  const screenX = DISC_CX + x3 * perspScale;
-  const discCenterY = H * (0.88 - riseY * 0.45);
-  const screenY = discCenterY + z3 * Math.sin(TILT) * perspScale;
-  return { x: screenX, y: screenY, scale: perspScale };
+const PALETTE = [
+  { h: 130, s: 72, l: 22 },
+  { h:   0, s:  0, l: 58 },
+  { h:  50, s: 80, l: 24 },
+  { h: 172, s: 68, l: 30 },
+  { h: 155, s: 55, l: 18 },
+];
+const PAL_WEIGHTS = [0.30, 0.20, 0.18, 0.22, 0.10];
+
+function pickColorIdx() {
+  let r = Math.random(), acc = 0;
+  for (let c = 0; c < PAL_WEIGHTS.length; c++) {
+    acc += PAL_WEIGHTS[c];
+    if (r < acc) return c;
+  }
+  return 0;
 }
 
-function makeSwarm(idx, W, H) {
-  const startAngle = (idx / SWARM_COUNT) * Math.PI * 2;
-  const speed      = (0.30 + Math.random() * 0.18) * (idx % 2 === 0 ? 1 : -1);
-  const radius     = W * (0.30 + Math.random() * 0.18);
-  const blastAngle = (idx / SWARM_COUNT) * Math.PI * 2 + Math.random() * 0.5;
-  const blastSpeed = 0.55 + Math.random() * 0.50;
-  const pos = project3D(startAngle, radius, 0, W, H);
-  return {
-    angle:      startAngle,
-    speed,
-    radius,
-    lx:         pos.x,
-    ly:         pos.y,
-    phase2:     false,
-    p2T:        0,
-    windVx:     Math.cos(blastAngle) * blastSpeed,
-    windVy:     Math.sin(blastAngle) * blastSpeed * 0.55 - 0.06,
-    gustOff:    Math.random() * 30,
-    hue:        100 + Math.random() * 40,
-    spawnDelay: (idx / SWARM_COUNT) * 1.5 + Math.random() * 0.4,
-  };
-}
+let fluidW, fluidH, fluidCX, fluidCY;
+let emitRX, emitRY, emitBaseY;
 
-function makeSwarmParticle(sw) {
-  const tang   = sw.angle;
-  const tdx    = -Math.sin(tang);
-  const tdy    =  Math.cos(tang) * 0.35;
-  const len    = Math.sqrt(tdx*tdx + tdy*tdy) || 1;
-  const pdx    = -tdy / len;
-  const pdy    =  tdx / len;
-  const longR  = 70 + Math.random() * 180;
-  const shortR = 15 + Math.random() * 45;
-  const longT  = (Math.random() - 0.5) * 2 * longR;
-  const shortT = (Math.random() - 0.5) * 2 * shortR;
-  return {
-    x:      sw.lx + tdx * longT + pdx * shortT,
-    y:      sw.ly + tdy * longT + pdy * shortT,
-    lag:    0.022 + Math.random() * 0.022,
-    wA:     Math.random() * Math.PI * 2,
-    wSpd:   0.3 + Math.random() * 0.6,
-    wR:     15 + Math.random() * 40,
-    wRlong: 55 + Math.random() * 120,
-    offX:   (Math.random() - 0.5) * 280,
-    offY:   (Math.random() - 0.5) * 120,
-    size:   1.2 + Math.random() * 2.5,
-    hue:    sw.hue + (Math.random() - 0.5) * 30,
-    ctype:  Math.random() < 0.65 ? 0 : Math.random() < 0.6 ? 1 : 2,
-    sw,
-    life:   -(sw.spawnDelay + Math.random() * 0.8),
-    active: false,
-  };
+function recalcFluidGeom() {
+  fluidW = pCanvas.width;
+  fluidH = pCanvas.height;
+  fluidCX = fluidW / 2;
+  fluidCY = fluidH / 2;
+  const minDim = Math.min(fluidW, fluidH);
+  emitRX    = minDim * 0.215;
+  emitRY    = minDim * 0.052;
+  emitBaseY = fluidCY + minDim * 0.075;
 }
+recalcFluidGeom();
+window.addEventListener('resize', recalcFluidGeom);
 
-function windX(x, y, t, off) {
-  return Math.cos(x * 0.0015 + t * 0.18 + off) * 0.35
-       + Math.sin(y * 0.002  - t * 0.13 + off * 1.3) * 0.22
-       + Math.cos(t * 0.38 + off * 0.7) * 0.18;
-}
-function windY(x, y, t, off) {
-  return Math.sin(x * 0.002  - t * 0.16 + off * 1.1) * 0.25
-       + Math.cos(y * 0.0015 + t * 0.21 + off * 0.9) * 0.16
-       + Math.sin(t * 0.27 + off * 1.4) * 0.11;
-}
-
-function initStorm() {
-  const W = window.innerWidth, H = window.innerHeight;
-  DISC_CX = W * 0.5;
-  DISC_CY = H * 0.85;
-  swarms.length = 0;
-  stormParticles.length = 0;
-  for (let i = 0; i < SWARM_COUNT; i++) {
-    const sw = makeSwarm(i, W, H);
-    swarms.push(sw);
-    for (let j = 0; j < SWARM_SIZE; j++)
-      stormParticles.push(makeSwarmParticle(sw));
+const fpRingScale = new Float32Array(FTOTAL);
+{
+  let idx = 0;
+  for (let r = 0; r < RING_COUNTS.length; r++) {
+    const n = RING_COUNTS[r];
+    for (let k = 0; k < n; k++) {
+      fpRing[idx]      = r;
+      fpRingScale[idx] = RING_SCALES[r];
+      fpTheta[idx]     = (k / n) * Math.PI * 2 + r * 0.31;
+      idx++;
+    }
   }
 }
-initStorm();
 
-function triggerBurst() {
-  stormTime = 0;
-  const W = window.innerWidth, H = window.innerHeight;
-  DISC_CX = W * 0.5;
-  DISC_CY = H * 0.85;
-  swarms.length = 0;
-  stormParticles.length = 0;
-  for (let i = 0; i < SWARM_COUNT; i++) {
-    const sw = makeSwarm(i, W, H);
-    swarms.push(sw);
-    for (let j = 0; j < SWARM_SIZE; j++) {
-      const p = makeSwarmParticle(sw);
-      p.active = true;
-      stormParticles.push(p);
+function fspawnAt(i) {
+  const scale = fpRingScale[i];
+  const theta = fpTheta[i];
+
+  const ex = fluidCX + Math.cos(theta) * emitRX * scale;
+  const ey = emitBaseY + Math.sin(theta) * emitRY * scale;
+
+  fpx[i] = ex + (Math.random() - 0.5) * 3.5;
+  fpy[i] = ey + (Math.random() - 0.5) * 2.0;
+
+  fpvx[i] = (Math.random() - 0.5) * 0.12;
+  fpvy[i] = -(0.05 + Math.random() * 0.25);
+
+  fpage[i]    = -(Math.random() * LIFETIME_BASE_F * 0.9);
+  fpmaxAge[i] =  LIFETIME_BASE_F + Math.random() * LIFETIME_RAND_F;
+
+  fpNoise[i]    = Math.random() * 800 + i * 6.17;
+  fpColorIdx[i] = pickColorIdx();
+
+  const ringFrac = fpRing[i] / (RING_COUNTS.length - 1);
+  const rnd = Math.random();
+  const baseSize = 1.0 - ringFrac * 0.35;
+  fpSize[i] = rnd < 0.60 ? baseSize * (0.6 + Math.random() * 0.9)
+            : rnd < 0.87 ? baseSize * (2.0 + Math.random() * 2.2)
+                         : baseSize * (4.8 + Math.random() * 4.0);
+}
+
+for (let i = 0; i < FTOTAL; i++) fspawnAt(i);
+
+function vortexField(x, y, t) {
+  const dx = x - fluidCX;
+  const dy = y - emitBaseY;
+
+  const radial = Math.abs(dx);
+  const signX  = dx >= 0 ? 1.0 : -1.0;
+
+  const ringR    = emitRX * 0.76;
+  const torusX   = radial - ringR;
+  const torusY   = dy;
+  const torusDist = Math.sqrt(torusX * torusX + torusY * torusY) + 0.001;
+
+  const coreR = emitRX * FLUID_CORE_FRAC;
+
+  const circ = torusDist < coreR
+    ? FLUID_VORTEX_STR * (torusDist / coreR)
+    : FLUID_VORTEX_STR * Math.pow(coreR / torusDist, 1.1);
+
+  const circVX =  (torusY / torusDist) * circ * signX;
+  const circVY = -(torusX / torusDist) * circ;
+
+  const axialDist = Math.abs(dx);
+  const centrality = Math.exp(-axialDist * 0.018);
+  const buoy = FLUID_BUOYANCY * (1.0 + centrality * 3.2);
+
+  const nx = ( Math.sin(x * FLUID_TURB_FREQ + t * 0.28) * Math.cos(y * FLUID_TURB_FREQ * 0.9 - t * 0.21) ) * FLUID_TURB_STR;
+  const ny = ( Math.cos(x * FLUID_TURB_FREQ * 1.1 - t * 0.19) * Math.sin(y * FLUID_TURB_FREQ + t * 0.33) ) * FLUID_TURB_STR;
+
+  return {
+    vx: circVX + nx,
+    vy: circVY - buoy + ny
+  };
+}
+
+function drawParticleAE(ctx, x, y, sz, col, alpha) {
+  const { h, s, l } = col;
+
+  if (sz > 1.5) {
+    const haloR = sz * 5.5;
+    const grd = ctx.createRadialGradient(x, y, 0, x, y, haloR);
+    grd.addColorStop(0,   `hsla(${h},${s}%,${Math.min(l + 30, 80)}%,${alpha * 0.13})`);
+    grd.addColorStop(0.4, `hsla(${h},${s}%,${l + 10}%,${alpha * 0.05})`);
+    grd.addColorStop(1,   `hsla(${h},${s}%,${l}%,0)`);
+    ctx.beginPath();
+    ctx.arc(x, y, haloR, 0, Math.PI * 2);
+    ctx.fillStyle = grd;
+    ctx.fill();
+  }
+
+  if (sz > 0.8) {
+    const midR = sz * 2.2;
+    const grd2 = ctx.createRadialGradient(x, y, 0, x, y, midR);
+    grd2.addColorStop(0,   `hsla(${h},${Math.min(s + 15, 100)}%,${Math.min(l + 40, 88)}%,${alpha * 0.38})`);
+    grd2.addColorStop(0.55,`hsla(${h},${s}%,${l + 12}%,${alpha * 0.15})`);
+    grd2.addColorStop(1,   `hsla(${h},${s}%,${l}%,0)`);
+    ctx.beginPath();
+    ctx.arc(x, y, midR, 0, Math.PI * 2);
+    ctx.fillStyle = grd2;
+    ctx.fill();
+  }
+
+  const coreR = Math.max(0.3, sz * 0.65);
+  ctx.beginPath();
+  ctx.arc(x, y, coreR, 0, Math.PI * 2);
+  ctx.fillStyle = `hsla(${h},${s}%,${l + 8}%,${alpha * 0.92})`;
+  ctx.fill();
+}
+
+let fluidTime = 0;
+let prevTransTarget2 = 0;
+
+function updateFluid(dt, ease, ctx) {
+  fluidTime += dt;
+  const t = fluidTime;
+
+  if (transitionTarget === 0 && prevTransTarget2 === 1) {
+    for (let i = 0; i < FTOTAL; i++) fspawnAt(i);
+  }
+  prevTransTarget2 = transitionTarget;
+
+  for (let i = 0; i < FTOTAL; i++) {
+    fpage[i] += dt * 60;
+
+    if (fpage[i] >= fpmaxAge[i]) { fspawnAt(i); continue; }
+    if (fpage[i] < 0) continue;
+
+    const field = vortexField(fpx[i], fpy[i], t + fpNoise[i] * 0.0008);
+
+    const pt = t * 0.75 + fpNoise[i];
+    const lnx = Math.sin(pt * 1.15 + fpx[i] * 0.008) * 0.11;
+    const lny = Math.cos(pt * 0.85 + fpy[i] * 0.008) * 0.09;
+
+    fpvx[i] = fpvx[i] * FLUID_VISCOSITY + field.vx + lnx;
+    fpvy[i] = fpvy[i] * FLUID_VISCOSITY + field.vy + lny;
+
+    fpx[i] += fpvx[i];
+    fpy[i] += fpvy[i];
+
+    const lifeT  = Math.max(0, fpage[i]) / fpmaxAge[i];
+    const fadeIn  = Math.min(fpage[i] / 24, 1.0);
+    const fadeOut = lifeT > 0.72 ? Math.pow(1 - (lifeT - 0.72) / 0.28, 1.4) : 1.0;
+    const alpha   = fadeIn * fadeOut * ease;
+    if (alpha < 0.007) continue;
+
+    const szPulse = Math.sin(lifeT * Math.PI);
+    const sz = fpSize[i] * (0.35 + szPulse * 0.65);
+    if (sz < 0.18) continue;
+
+    const palBase = PALETTE[fpColorIdx[i]];
+
+    const riseNorm = Math.max(0, Math.min(1, (emitBaseY - fpy[i]) / (fluidH * 0.5)));
+    const col = {
+      h: palBase.h,
+      s: palBase.s,
+      l: palBase.l + riseNorm * 14
+    };
+
+    drawParticleAE(ctx, fpx[i], fpy[i], sz, col, alpha);
+  }
+}
+
+const DUST_COUNT = 55;
+const dust = [];
+
+function spawnDust(randomAge) {
+  return {
+    x: Math.random() * window.innerWidth,
+    y: Math.random() * window.innerHeight,
+    vx: (Math.random() - 0.5) * 0.12,
+    vy: (Math.random() - 0.5) * 0.12,
+    ax: 0, ay: 0,
+    phase: Math.random() * Math.PI * 2,
+    phaseSpeed: 0.2 + Math.random() * 0.3,
+    size: 0.6 + Math.random() * 1.1,
+    maxAlpha: 0.25 + Math.random() * 0.45,
+    life: randomAge ? Math.random() * 999 : 0,
+    maxLife: 600 + Math.random() * 400,
+  };
+}
+
+for (let i = 0; i < DUST_COUNT; i++) dust.push(spawnDust(true));
+
+function updateDust(dt, ctx) {
+  const W = pCanvas.width, H = pCanvas.height;
+  const t = performance.now() / 1000;
+
+  for (const d of dust) {
+    d.life += dt * 60;
+    if (d.life >= d.maxLife) {
+      const nd = spawnDust(false);
+      nd.x = Math.random() * W;
+      nd.y = Math.random() * H;
+      Object.assign(d, nd);
+      continue;
     }
+
+    
+    d.ax += (Math.random() - 0.5) * 0.004;
+    d.ay += (Math.random() - 0.5) * 0.004;
+    d.ax *= 0.97;
+    d.ay *= 0.97;
+    d.vx = (d.vx + d.ax) * 0.995;
+    d.vy = (d.vy + d.ay) * 0.995;
+    const spd = Math.sqrt(d.vx * d.vx + d.vy * d.vy);
+    if (spd > 0.18) { d.vx *= 0.18 / spd; d.vy *= 0.18 / spd; }
+
+    d.x += d.vx * dt * 60;
+    d.y += d.vy * dt * 60;
+
+    
+    if (d.x < -5)  d.x = W + 5;
+    if (d.x > W+5) d.x = -5;
+    if (d.y < -5)  d.y = H + 5;
+    if (d.y > H+5) d.y = -5;
+
+    const lifeT = d.life / d.maxLife;
+    const fade  = lifeT < 0.08 ? lifeT / 0.08
+                : lifeT > 0.88 ? (1 - lifeT) / 0.12
+                : 1.0;
+    const flicker = 0.7 + 0.3 * Math.sin(t * d.phaseSpeed + d.phase);
+    const alpha = fade * flicker * d.maxAlpha;
+    if (alpha < 0.01) continue;
+
+    const r = d.size;
+    if (r > 0.9) {
+      const grd = ctx.createRadialGradient(d.x, d.y, 0, d.x, d.y, r * 3.5);
+      grd.addColorStop(0, `rgba(255,255,255,${alpha * 0.5})`);
+      grd.addColorStop(1, `rgba(255,255,255,0)`);
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, r * 3.5, 0, Math.PI * 2);
+      ctx.fillStyle = grd;
+      ctx.fill();
+    }
+    ctx.beginPath();
+    ctx.arc(d.x, d.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+    ctx.fill();
   }
 }
 
@@ -482,23 +656,12 @@ let lastPTime = performance.now();
 function updateParticles(now) {
   const dt = Math.min((now - lastPTime) / 1000, 0.05);
   lastPTime = now;
-  stormTime += dt;
 
   transitionT += (transitionTarget - transitionT) * Math.min(dt * 4.5, 1);
   const ease   = transitionT * transitionT * (3 - 2 * transitionT);
   const pAlpha = 1 - ease;
 
-  if (transitionTarget === 1 && prevTransTarget2 === 0) {
-    triggerBurst();
-    burstActive = true;
-  }
-  if (transitionTarget === 0 && prevTransTarget2 === 1) {
-    burstActive = false;
-    for (const p of stormParticles) p.active = false;
-  }
-  prevTransTarget2 = transitionTarget;
-
-  const W = window.innerWidth, H = window.innerHeight;
+  const W = pCanvas.width, H = pCanvas.height;
   pCtx.clearRect(0, 0, W, H);
 
   if (pAlpha > 0.01) {
@@ -526,101 +689,16 @@ function updateParticles(now) {
   }
 
   if (ease > 0.01) {
-    const W2 = window.innerWidth, H2 = window.innerHeight;
-    const RISE_DUR = 5.0;
-    const riseT    = Math.min(stormTime / RISE_DUR, 1.0);
-
-    for (const sw of swarms) {
-      if (stormTime < sw.spawnDelay) continue;
-      if (!sw.phase2) {
-        sw.angle += sw.speed * (1.0 + riseT * 0.6) * dt;
-        const pos = project3D(sw.angle, sw.radius, riseT, W2, H2);
-        sw.lx = pos.x;
-        sw.ly = pos.y;
-        if (riseT >= 1.0) {
-          sw.phase2 = true;
-          sw.p2T    = 0;
-          sw.lx = W2 * (0.05 + Math.random() * 0.90);
-          sw.ly = H2 * (0.05 + Math.random() * 0.90);
-          const wa = Math.random() * Math.PI * 2;
-          const ws = 0.28 + Math.random() * 0.32;
-          sw.windVx = Math.cos(wa) * ws;
-          sw.windVy = Math.sin(wa) * ws * 0.5;
-        }
-      } else {
-        sw.p2T += dt;
-        const wx    = windX(sw.lx, sw.ly, stormTime, sw.gustOff);
-        const wy    = windY(sw.lx, sw.ly, stormTime, sw.gustOff);
-        sw.lx += (sw.windVx + wx) * dt * 60;
-        sw.ly += (sw.windVy + wy) * dt * 60;
-      }
-    }
-
-    for (const p of stormParticles) {
-      if (!p.active) continue;
-      p.life += dt;
-      if (p.life < 0) continue;
-      const sw = p.sw;
-      if (stormTime < sw.spawnDelay) continue;
-
-      let tx, ty;
-      if (!sw.phase2) {
-        p.wA += p.wSpd * dt;
-        const tdx  = -Math.sin(sw.angle);
-        const tdy  =  Math.cos(sw.angle) * 0.35;
-        const tlen = Math.sqrt(tdx*tdx + tdy*tdy) || 1;
-        const pdx  = -tdy / tlen;
-        const pdy  =  tdx / tlen;
-        tx = sw.lx + (tdx/tlen) * Math.cos(p.wA) * p.wRlong + pdx * Math.sin(p.wA) * p.wR;
-        ty = sw.ly + (tdy/tlen) * Math.cos(p.wA) * p.wRlong + pdy * Math.sin(p.wA) * p.wR;
-      } else {
-        p.wA += p.wSpd * 0.4 * dt;
-        const driftX = (Math.random() - 0.5) * 0.8;
-        const driftY = (Math.random() - 0.5) * 0.8;
-        tx = sw.lx + p.offX * 2.5 + Math.cos(p.wA) * p.wRlong * 1.8 + driftX;
-        ty = sw.ly + p.offY * 2.5 + Math.sin(p.wA) * p.wR * 1.5 + driftY;
-      }
-
-      const lagK = sw.phase2
-        ? Math.min(0.012 * dt * 60, 0.5)
-        : Math.min(p.lag * dt * 60, 0.88);
-
-      p.x += (tx - p.x) * lagK;
-      p.y += (ty - p.y) * lagK;
-
-      const fadeIn = Math.min(p.life / 0.5, 1.0);
-      const fa = fadeIn * ease;
-      if (fa < 0.01) continue;
-
-      const sz = p.size;
-      let mainColor, coreColor;
-      if (p.ctype === 2) {
-        mainColor = `hsla(${p.hue},15%,70%,${fa * 0.55})`;
-        coreColor = `hsla(${p.hue},10%,85%,${fa * 0.35})`;
-      } else if (p.ctype === 1) {
-        mainColor = `hsla(${Math.min(p.hue, 115)},75%,42%,${fa * 0.7})`;
-        coreColor = `hsla(${Math.min(p.hue, 115)},60%,68%,${fa * 0.3})`;
-      } else {
-        mainColor = `hsla(${p.hue},72%,38%,${fa * 0.75})`;
-        coreColor = `hsla(${p.hue},50%,65%,${fa * 0.3})`;
-      }
-
-      pCtx.beginPath();
-      pCtx.arc(p.x, p.y, sz, 0, Math.PI * 2);
-      pCtx.fillStyle = mainColor;
-      pCtx.fill();
-      pCtx.beginPath();
-      pCtx.arc(p.x, p.y, sz * 0.38, 0, Math.PI * 2);
-      pCtx.fillStyle = coreColor;
-      pCtx.fill();
-    }
+    updateFluid(dt, ease, pCtx);
   }
+
+  
+  updateDust(dt, pCtx);
 
   requestAnimationFrame(updateParticles);
 }
 requestAnimationFrame(updateParticles);
 
-// ── Three.js Spirals ──────────────────────────────────────────────────────────
 async function initThree() {
   await loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js');
 
@@ -652,10 +730,8 @@ async function initThree() {
 
   const worldHalfH     = Math.tan((FOV / 2) * Math.PI / 180) * camZ;
   const worldHalfW     = worldHalfH * (W / H);
-  // On portrait mobile W < H, sphere is constrained by width
   const SPHERE_WORLD_R = Math.min(worldHalfH, worldHalfW) * (SIZE / Math.min(W, H));
 
-  // Spirals scale exactly with sphere world radius
   const spiralScale = SPHERE_WORLD_R * 0.46;
 
   const pivotR = new THREE.Group();
@@ -700,9 +776,7 @@ async function initThree() {
 
   try {
     const [gR, gL] = await Promise.all([loadGLB('spiral R.glb'), loadGLB('spiral L.glb')]);
-
     setupMesh(gR.scene, { x: 0, y: Math.PI / 2, z: 0 }, spiralGroupR, spiralMatsR);
-
     gL.scene.scale.x = -1;
     setupMesh(gL.scene, { x: 0, y: Math.PI / 2, z: 0 }, spiralGroupL, spiralMatsL);
   } catch (e) {
@@ -718,7 +792,7 @@ async function initThree() {
     lastT = now;
 
     const ease = transitionT * transitionT * (3 - 2 * transitionT);
-    const dropWorldUnits = (40 / H) * worldHalfH * 2;
+    const dropWorldUnits = (40 / window.innerHeight) * worldHalfH * 2;
     const targetY = HIDDEN_Y + (REST_Y - dropWorldUnits - HIDDEN_Y) * ease;
 
     spiralGroupR.position.y = targetY;
@@ -737,10 +811,8 @@ async function initThree() {
 
 initThree().catch(e => console.error('Three init error:', e));
 
-// ── Sphere drop on scroll ─────────────────────────────────────────────────────
 const SPHERE_DROP_PX = 70;
 
-// ── WebGL Sphere Render Loop ──────────────────────────────────────────────────
 gl.enable(gl.BLEND);
 gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
@@ -751,10 +823,22 @@ function render(now) {
   const dt = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
 
-  fPos += fSpeed * dt;
+  
+  
+  
   const N = TOTAL_FRAMES - 1, cycle = 2 * N;
-  let p = ((fPos % cycle) + cycle) % cycle;
-  const fExact = p <= N ? p : cycle - p;
+  const pNorm = ((fPos % cycle) + cycle) % cycle;
+  const curFrame = pNorm <= N ? pNorm : cycle - pNorm;
+
+  
+  const edgeFrac = 1 - Math.abs(curFrame / N * 2 - 1); 
+  const EDGE_BOOST = 3.5;  
+  const EDGE_WIDTH = 0.18; 
+  const boost = 1 + (EDGE_BOOST - 1) * Math.max(0, (edgeFrac - (1 - EDGE_WIDTH)) / EDGE_WIDTH);
+
+  fPos += fSpeed * boost * dt;
+  const p2 = ((fPos % cycle) + cycle) % cycle;
+  const fExact = p2 <= N ? p2 : cycle - p2;
 
   const dropEase = transitionT * transitionT * (3 - 2 * transitionT);
   container.style.transform = `translateY(${dropEase * SPHERE_DROP_PX}px)`;
