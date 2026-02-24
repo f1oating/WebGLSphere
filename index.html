@@ -22,6 +22,8 @@
     pointer-events: none;
     z-index: 3;
   }
+
+
 </style>
 </head>
 <body>
@@ -30,6 +32,8 @@
 <div id="container">
   <canvas id="c"></canvas>
 </div>
+
+
 
 <script type="module">
 
@@ -353,12 +357,6 @@ for (let i = 0; i < PARTICLE_COUNT; i++) {
 }
 
 // ── Storm Swarm System ────────────────────────────────────────────────────────
-// Phase 1: 3D vortex — leaders orbit a circle in 3D space, projected to 2D.
-//          The circle is tilted (like a horizontal disc seen in perspective),
-//          so particles at the back appear higher/smaller, front lower/larger.
-//          Creates a real 3D spinning funnel effect rising from the bottom.
-// Phase 2: Leaders explode outward across the entire screen in all directions.
-
 const SWARM_COUNT = 14;
 const SWARM_SIZE  = 80;
 
@@ -368,38 +366,27 @@ let stormTime        = 0;
 let burstActive      = false;
 let prevTransTarget2 = 0;
 
-// 3D disc params — set in init
-let DISC_CX, DISC_CY;      // screen center of disc
-const DISC_R    = 0;       // placeholder, set dynamically
-const TILT      = 0.38;    // tilt angle of disc (0=flat, PI/2=vertical)
-// As disc spins, it also rises — vortex rises from bottom to center
+let DISC_CX, DISC_CY;
+const DISC_R    = 0;
+const TILT      = 0.38;
 
 function project3D(angle, radius, riseY, W, H) {
-  // 3D circle tilted at TILT angle — x rotates freely, y compressed by cos(TILT)
-  // riseY: how much the disc has risen (0=bottom, 1=screen center)
   const x3 = Math.cos(angle) * radius;
-  const z3 = Math.sin(angle) * radius;  // depth
-  // Project: tilt means y = z*sin(tilt), scale by perspective
-  const perspScale = 1.0 + z3 * 0.0012;  // subtle perspective depth
+  const z3 = Math.sin(angle) * radius;
+  const perspScale = 1.0 + z3 * 0.0012;
   const screenX = DISC_CX + x3 * perspScale;
-  // y: disc center rises from bottom to H*0.45, z adds vertical displacement
   const discCenterY = H * (0.88 - riseY * 0.45);
   const screenY = discCenterY + z3 * Math.sin(TILT) * perspScale;
   return { x: screenX, y: screenY, scale: perspScale };
 }
 
 function makeSwarm(idx, W, H) {
-  // Evenly spaced around the disc
   const startAngle = (idx / SWARM_COUNT) * Math.PI * 2;
   const speed      = (0.30 + Math.random() * 0.18) * (idx % 2 === 0 ? 1 : -1);
   const radius     = W * (0.30 + Math.random() * 0.18);
-
-  // Phase 2: explode outward — each swarm in different direction, full screen
   const blastAngle = (idx / SWARM_COUNT) * Math.PI * 2 + Math.random() * 0.5;
   const blastSpeed = 0.55 + Math.random() * 0.50;
-
   const pos = project3D(startAngle, radius, 0, W, H);
-
   return {
     angle:      startAngle,
     speed,
@@ -417,19 +404,16 @@ function makeSwarm(idx, W, H) {
 }
 
 function makeSwarmParticle(sw) {
-  // Elongated along orbit tangent
   const tang   = sw.angle;
   const tdx    = -Math.sin(tang);
-  const tdy    =  Math.cos(tang) * 0.35;  // compressed Y for 3D feel
+  const tdy    =  Math.cos(tang) * 0.35;
   const len    = Math.sqrt(tdx*tdx + tdy*tdy) || 1;
   const pdx    = -tdy / len;
   const pdy    =  tdx / len;
-
   const longR  = 70 + Math.random() * 180;
   const shortR = 15 + Math.random() * 45;
   const longT  = (Math.random() - 0.5) * 2 * longR;
   const shortT = (Math.random() - 0.5) * 2 * shortR;
-
   return {
     x:      sw.lx + tdx * longT + pdx * shortT,
     y:      sw.ly + tdy * longT + pdy * shortT,
@@ -438,7 +422,7 @@ function makeSwarmParticle(sw) {
     wSpd:   0.3 + Math.random() * 0.6,
     wR:     15 + Math.random() * 40,
     wRlong: 55 + Math.random() * 120,
-    offX:   (Math.random() - 0.5) * 280,  // static offset for phase2
+    offX:   (Math.random() - 0.5) * 280,
     offY:   (Math.random() - 0.5) * 120,
     size:   1.2 + Math.random() * 2.5,
     hue:    sw.hue + (Math.random() - 0.5) * 30,
@@ -517,23 +501,19 @@ function updateParticles(now) {
   const W = window.innerWidth, H = window.innerHeight;
   pCtx.clearRect(0, 0, W, H);
 
-  // ── Screen 1 particles ─────────────────────────────────────────────────────
   if (pAlpha > 0.01) {
     for (const p of particles) {
       p.life += dt;
       if (p.life >= p.maxLife) { Object.assign(p, spawnParticle()); continue; }
-
       const t = p.life / p.maxLife;
       p.angle += p.angleSpeed * dt;
       p.x += (p.vx + Math.sin(p.angle) * p.spiralR * (0.3 + t * 0.7)) * dt * 60;
       p.y += p.vy * dt * 60;
       p.x = Math.max(getSC().cx - getSC().r, Math.min(getSC().cx + getSC().r, p.x));
-
       let a = t < 0.08 ? t / 0.08 : 1 - (t - 0.08) / 0.92;
       a = Math.pow(Math.max(0, Math.min(1, a)), 1.1) * pAlpha;
       const sz = p.size * (1 - t * 0.3);
       if (sz < 0.05 || a < 0.01) continue;
-
       const grd = pCtx.createRadialGradient(p.x, p.y, 0, p.x, p.y, sz * 3);
       grd.addColorStop(0,   `hsla(${p.hue},100%,85%,${a})`);
       grd.addColorStop(0.4, `hsla(${p.hue},100%,60%,${a * 0.6})`);
@@ -545,7 +525,6 @@ function updateParticles(now) {
     }
   }
 
-  // ── Screen 2: 3D vortex rise → wide scatter ───────────────────────────────
   if (ease > 0.01) {
     const W2 = window.innerWidth, H2 = window.innerHeight;
     const RISE_DUR = 5.0;
@@ -561,10 +540,8 @@ function updateParticles(now) {
         if (riseT >= 1.0) {
           sw.phase2 = true;
           sw.p2T    = 0;
-          // Teleport leader to a random spot across the full screen
           sw.lx = W2 * (0.05 + Math.random() * 0.90);
           sw.ly = H2 * (0.05 + Math.random() * 0.90);
-          // Fresh random wind direction
           const wa = Math.random() * Math.PI * 2;
           const ws = 0.28 + Math.random() * 0.32;
           sw.windVx = Math.cos(wa) * ws;
@@ -576,7 +553,6 @@ function updateParticles(now) {
         const wy    = windY(sw.lx, sw.ly, stormTime, sw.gustOff);
         sw.lx += (sw.windVx + wx) * dt * 60;
         sw.ly += (sw.windVy + wy) * dt * 60;
-        // No bounds — leader and particles can drift freely
       }
     }
 
@@ -589,7 +565,6 @@ function updateParticles(now) {
 
       let tx, ty;
       if (!sw.phase2) {
-        // Phase 1: circular/elliptical wander along orbit tangent
         p.wA += p.wSpd * dt;
         const tdx  = -Math.sin(sw.angle);
         const tdy  =  Math.cos(sw.angle) * 0.35;
@@ -599,18 +574,16 @@ function updateParticles(now) {
         tx = sw.lx + (tdx/tlen) * Math.cos(p.wA) * p.wRlong + pdx * Math.sin(p.wA) * p.wR;
         ty = sw.ly + (tdy/tlen) * Math.cos(p.wA) * p.wRlong + pdy * Math.sin(p.wA) * p.wR;
       } else {
-        // Phase 2: very loose — particles drift toward leader slowly, spread wide
         p.wA += p.wSpd * 0.4 * dt;
-        const driftX = (Math.random() - 0.5) * 0.8;  // small random nudge each frame
+        const driftX = (Math.random() - 0.5) * 0.8;
         const driftY = (Math.random() - 0.5) * 0.8;
         tx = sw.lx + p.offX * 2.5 + Math.cos(p.wA) * p.wRlong * 1.8 + driftX;
         ty = sw.ly + p.offY * 2.5 + Math.sin(p.wA) * p.wR * 1.5 + driftY;
       }
 
-      // Phase 2: much weaker pull so group disperses
       const lagK = sw.phase2
-        ? Math.min(0.012 * dt * 60, 0.5)   // very loose in free flight
-        : Math.min(p.lag * dt * 60, 0.88); // normal during orbit
+        ? Math.min(0.012 * dt * 60, 0.5)
+        : Math.min(p.lag * dt * 60, 0.88);
 
       p.x += (tx - p.x) * lagK;
       p.y += (ty - p.y) * lagK;
@@ -636,7 +609,6 @@ function updateParticles(now) {
       pCtx.arc(p.x, p.y, sz, 0, Math.PI * 2);
       pCtx.fillStyle = mainColor;
       pCtx.fill();
-
       pCtx.beginPath();
       pCtx.arc(p.x, p.y, sz * 0.38, 0, Math.PI * 2);
       pCtx.fillStyle = coreColor;
@@ -674,12 +646,17 @@ async function initThree() {
   renderer.outputEncoding = THREE.sRGBEncoding;
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-  const dl = new THREE.DirectionalLight(0x88ffcc, 1.2);
-  dl.position.set(-0.5, -0.6, 0.8);
+  const dl = new THREE.DirectionalLight(0x88ffcc, 6.0);
+  dl.position.set(-2.0, 0.14, 2.0);
   scene.add(dl);
 
   const worldHalfH     = Math.tan((FOV / 2) * Math.PI / 180) * camZ;
-  const SPHERE_WORLD_R = worldHalfH * (SIZE / H);
+  const worldHalfW     = worldHalfH * (W / H);
+  // On portrait mobile W < H, sphere is constrained by width
+  const SPHERE_WORLD_R = Math.min(worldHalfH, worldHalfW) * (SIZE / Math.min(W, H));
+
+  // Spirals scale exactly with sphere world radius
+  const spiralScale = SPHERE_WORLD_R * 0.46;
 
   const pivotR = new THREE.Group();
   const pivotL = new THREE.Group();
@@ -693,11 +670,11 @@ async function initThree() {
   const HIDDEN_Y = worldHalfH * 3.0;
 
   spiralGroupR.position.y = HIDDEN_Y;
-  spiralGroupR.scale.setScalar(0.12);
+  spiralGroupR.scale.setScalar(spiralScale);
   pivotR.add(spiralGroupR);
 
   spiralGroupL.position.y = HIDDEN_Y;
-  spiralGroupL.scale.setScalar(0.12);
+  spiralGroupL.scale.setScalar(spiralScale);
   pivotL.add(spiralGroupL);
 
   const spiralMatsR = [];
