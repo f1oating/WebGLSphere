@@ -560,11 +560,11 @@ async function initThree() {
   const HIDDEN_Y = worldHalfH * 3.0;
 
   spiralGroupR.position.y = HIDDEN_Y;
-  spiralGroupR.scale.setScalar(0.10);
+  spiralGroupR.scale.setScalar(0.12);
   pivotR.add(spiralGroupR);
 
   spiralGroupL.position.y = HIDDEN_Y;
-  spiralGroupL.scale.setScalar(0.10);
+  spiralGroupL.scale.setScalar(0.12);
   pivotL.add(spiralGroupL);
 
   const spiralMatsR = [];
@@ -602,7 +602,7 @@ async function initThree() {
   }
 
   let lastT = performance.now();
-  const ROT_SPEED = 0.8;
+  const ROT_SPEED = 2.0;
 
   function renderThree(now) {
     requestAnimationFrame(renderThree);
