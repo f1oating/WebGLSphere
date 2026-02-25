@@ -309,6 +309,7 @@ const TOTAL_FRAMES = 120.0;
 let fPos   = 0.0;
 const fSpeed = 12.0;
 
+// ─── PARTICLE CANVAS ──────────────────────────────────────────────────────
 const pCanvas = document.getElementById('particle-canvas');
 const pCtx    = pCanvas.getContext('2d');
 
@@ -319,6 +320,45 @@ function resizePC() {
 resizePC();
 window.addEventListener('resize', resizePC);
 
+// ─── MOUSE TRACKING ───────────────────────────────────────────────────────
+const mouse = { x: -9999, y: -9999, active: false };
+window.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; mouse.active = true; });
+window.addEventListener('mouseleave', () => { mouse.active = false; });
+
+// ─── GLOW SPRITE CACHE ────────────────────────────────────────────────────
+// Pre-render radial glow sprites to offscreen canvases to avoid per-particle gradient creation
+const GLOW_CACHE = new Map();
+function getGlowSprite(hue, radius) {
+  const key = `${hue}_${Math.round(radius)}`;
+  if (GLOW_CACHE.has(key)) return GLOW_CACHE.get(key);
+  const sz = Math.ceil(radius * 2) + 2;
+  const oc = document.createElement('canvas');
+  oc.width = oc.height = sz;
+  const ox = oc.getContext('2d');
+  const cx = sz / 2, cy = sz / 2;
+  const grd = ox.createRadialGradient(cx, cy, 0, cx, cy, radius);
+  grd.addColorStop(0,   `hsla(${hue},70%,82%,0.55)`);
+  grd.addColorStop(0.45,`hsla(${hue},65%,55%,0.18)`);
+  grd.addColorStop(1,   `hsla(${hue},60%,38%,0)`);
+  ox.beginPath();
+  ox.arc(cx, cy, radius, 0, Math.PI*2);
+  ox.fillStyle = grd;
+  ox.fill();
+  GLOW_CACHE.set(key, oc);
+  return oc;
+}
+
+// ─── COLOR PALETTE for dragon particles ───────────────────────────────────
+const DRAGON_PARTICLE_PALETTE = [
+  { hue: 55,  sat: 18, light: 88 },  // dirty white/cream
+  { hue: 48,  sat: 70, light: 72 },  // dark yellow/amber
+  { hue: 110, sat: 55, light: 62 },  // dark green
+  { hue: 38,  sat: 45, light: 80 },  // warm white
+  { hue: 128, sat: 50, light: 58 },  // deep green
+  { hue: 52,  sat: 60, light: 76 },  // golden yellow
+];
+
+// ─── SIMPLE RISING PARTICLES (original — unchanged) ───────────────────────
 const PARTICLE_COUNT = 180;
 const particles = [];
 
@@ -349,230 +389,261 @@ for (let i = 0; i < PARTICLE_COUNT; i++) {
   particles.push(p);
 }
 
-const RING_COUNTS = [72, 56, 40, 22];
-const RING_SCALES = [1.00, 0.78, 0.55, 0.32];
-const FTOTAL = RING_COUNTS.reduce((a, b) => a + b, 0);
+// ─── DRAGON SYSTEM ────────────────────────────────────────────────────────
+function hash(n) { return ((Math.sin(n * 127.1 + 311.7) * 43758.5453) % 1 + 1) % 1; }
+function noise2(x, y) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  const fx = x-ix, fy = y-iy;
+  const ux = fx*fx*(3-2*fx), uy = fy*fy*(3-2*fy);
+  const a=hash(ix+iy*57), b=hash(ix+1+iy*57);
+  const c=hash(ix+(iy+1)*57), d=hash(ix+1+(iy+1)*57);
+  return a+(b-a)*ux+(c-a)*uy+(a-b-c+d)*ux*uy;
+}
 
-const fpx        = new Float32Array(FTOTAL);
-const fpy        = new Float32Array(FTOTAL);
-const fpvx       = new Float32Array(FTOTAL);
-const fpvy       = new Float32Array(FTOTAL);
-const fpage      = new Float32Array(FTOTAL);
-const fpmaxAge   = new Float32Array(FTOTAL);
-const fpNoise    = new Float32Array(FTOTAL);
-const fpSize     = new Float32Array(FTOTAL);
-const fpColorIdx = new Uint8Array(FTOTAL);
-const fpRing     = new Uint8Array(FTOTAL);
-const fpTheta    = new Float32Array(FTOTAL);
+const NUM_DRAGONS       = 5;
+const SEG_COUNT         = 15;
+const SEG_DIST          = 20;
+const PARTICLES_PER_SEG = 16;   // slightly reduced from 18 for FPS
+const MOUSE_REPEL_R     = 140;  // radius of mouse influence
+const MOUSE_REPEL_STR   = 4.5;  // push strength
+const MOUSE_ATTRACT_R   = 260;  // outer attraction ring (subtle curl)
+const MOUSE_ATTRACT_STR = 1.2;
 
-const FLUID_BUOYANCY      = 0.0016;
-const FLUID_VORTEX_STR    = 0.038;
-const FLUID_CORE_FRAC     = 0.48;
-const FLUID_VISCOSITY     = 0.9855;
-const FLUID_TURB_STR      = 0.006;
-const FLUID_TURB_FREQ     = 0.013;
-const LIFETIME_BASE_F     = 280;
-const LIFETIME_RAND_F     = 160;
-
-const PALETTE = [
-  { h: 130, s: 72, l: 22 },
-  { h:   0, s:  0, l: 58 },
-  { h:  50, s: 80, l: 24 },
-  { h: 172, s: 68, l: 30 },
-  { h: 155, s: 55, l: 18 },
-];
-const PAL_WEIGHTS = [0.30, 0.20, 0.18, 0.22, 0.10];
-
-function pickColorIdx() {
-  let r = Math.random(), acc = 0;
-  for (let c = 0; c < PAL_WEIGHTS.length; c++) {
-    acc += PAL_WEIGHTS[c];
-    if (r < acc) return c;
+class Dragon {
+  constructor(id) {
+    this.id  = id;
+    this.reset();
   }
-  return 0;
-}
 
-let fluidW, fluidH, fluidCX, fluidCY;
-let emitRX, emitRY, emitBaseY;
+  reset() {
+    const W = pCanvas.width;
+    const H = pCanvas.height;
+    const startX = (0.10 + this.id * 0.20) * W;
+    const startY = H + 120 + SEG_COUNT * SEG_DIST + this.id * 40;
 
-function recalcFluidGeom() {
-  fluidW = pCanvas.width;
-  fluidH = pCanvas.height;
-  fluidCX = fluidW / 2;
-  fluidCY = fluidH / 2;
-  const minDim = Math.min(fluidW, fluidH);
-  emitRX    = minDim * 0.215;
-  emitRY    = minDim * 0.052;
-  emitBaseY = fluidCY + minDim * 0.075;
-}
-recalcFluidGeom();
-window.addEventListener('resize', recalcFluidGeom);
+    this.segs = [];
+    for (let i = 0; i < SEG_COUNT; i++) {
+      this.segs.push({ x: startX, y: startY + i * SEG_DIST });
+    }
 
-const fpRingScale = new Float32Array(FTOTAL);
-{
-  let idx = 0;
-  for (let r = 0; r < RING_COUNTS.length; r++) {
-    const n = RING_COUNTS[r];
-    for (let k = 0; k < n; k++) {
-      fpRing[idx]      = r;
-      fpRingScale[idx] = RING_SCALES[r];
-      fpTheta[idx]     = (k / n) * Math.PI * 2 + r * 0.31;
-      idx++;
+    // Pre-bake cloud offsets per segment
+    this.clouds = [];
+    for (let i = 0; i < SEG_COUNT; i++) {
+      const puff = [];
+      const count  = Math.round(PARTICLES_PER_SEG * (1 - i / SEG_COUNT * 0.65));
+      const spread = 42 * (1 - i / SEG_COUNT * 0.5) + 8;  // bigger spread
+      for (let p = 0; p < count; p++) {
+        const ang = Math.random() * Math.PI * 2;
+        const r   = Math.pow(Math.random(), 0.5) * spread;
+        const bx = Math.cos(ang) * r;
+        const by = Math.sin(ang) * r;
+        puff.push({
+          ox: bx, oy: by,     // current display offset (smoothed)
+          bx, by,             // base resting offset
+          vox: 0, voy: 0,     // velocity of offset (for smooth mouse repulsion)
+          r:      1.4 + Math.random() * 3.8 * (1 - i / SEG_COUNT * 0.6),
+          phase:  Math.random() * Math.PI * 2,
+          flkS:   0.2 + Math.random() * 0.8,   // slower flicker = smoother
+          palIdx: Math.floor(Math.random() * DRAGON_PARTICLE_PALETTE.length),
+        });
+      }
+      this.clouds.push(puff);
+    }
+
+    this.vx       = (Math.random()-0.5)*0.3;
+    this.vy       = -(2.8 + Math.random() * 1.5);
+    this.speed    = 2.0 + Math.random() * 1.2;  // gentler speed
+    this.steer    = 0.022 + Math.random() * 0.018;  // slower turn = smoother curves
+    this.noiseOffX = Math.random() * 100;
+    this.noiseOffY = Math.random() * 100;
+    this.noiseSpd  = 0.00022 + Math.random() * 0.00028;
+    this.risen     = false;
+    // Distribute dragons more evenly: each gets a vertical band + randomness
+    const bandH = 0.80 / NUM_DRAGONS;
+    this.riseY = H * (0.08 + bandH * this.id + Math.random() * bandH);
+  }
+
+  update(t) {
+    const W = pCanvas.width;
+    const H = pCanvas.height;
+    const head = this.segs[0];
+
+    if (!this.risen) {
+      this.vy = -this.speed;
+      this.vx *= 0.92;
+      head.x += this.vx;
+      head.y += this.vy;
+      if (head.y <= this.riseY) {
+        this.risen = true;
+        const nx = noise2(head.x*0.0014 + this.noiseOffX, head.y*0.0014);
+        const ny = noise2(head.x*0.0014, head.y*0.0014 + this.noiseOffY);
+        const ang = (nx*2-1)*Math.PI*1.2 + (ny*2-1)*0.45;
+        this.vx = Math.cos(ang) * this.speed;
+        this.vy = Math.sin(ang) * this.speed;
+      }
+    } else {
+      // Flow field
+      const nx = noise2(head.x*0.0014 + this.noiseOffX + t*this.noiseSpd*100,
+                        head.y*0.0014 + t*this.noiseSpd*40);
+      const ny = noise2(head.x*0.0014 + t*this.noiseSpd*30,
+                        head.y*0.0014 + this.noiseOffY + t*this.noiseSpd*90);
+      const ang = (nx*2-1)*Math.PI*1.2 + (ny*2-1)*0.45;
+      let dvx = Math.cos(ang)*this.speed;
+      let dvy = Math.sin(ang)*this.speed;
+
+      // Mouse interaction
+      if (mouse.active) {
+        const mdx = head.x - mouse.x;
+        const mdy = head.y - mouse.y;
+        const md2 = mdx*mdx + mdy*mdy;
+        const md  = Math.sqrt(md2) + 0.1;
+        if (md < MOUSE_REPEL_R) {
+          // Repel: push away
+          const str = MOUSE_REPEL_STR * (1 - md / MOUSE_REPEL_R);
+          dvx += (mdx / md) * str;
+          dvy += (mdy / md) * str;
+        } else if (md < MOUSE_ATTRACT_R) {
+          // Subtle curl toward mouse at mid-distance
+          const str = MOUSE_ATTRACT_STR * (1 - (md - MOUSE_REPEL_R) / (MOUSE_ATTRACT_R - MOUSE_REPEL_R));
+          dvx -= (mdx / md) * str * 0.4;
+          dvy -= (mdy / md) * str * 0.4;
+        }
+      }
+
+      this.vx += (dvx - this.vx) * this.steer;
+      this.vy += (dvy - this.vy) * this.steer;
+      const spd = Math.sqrt(this.vx*this.vx + this.vy*this.vy) + 0.001;
+      this.vx = (this.vx/spd)*this.speed;
+      this.vy = (this.vy/spd)*this.speed;
+      // Wall reflection — bounce off edges instead of gentle nudge
+      const pad = 50;
+      if (head.x < pad && this.vx < 0) this.vx = Math.abs(this.vx);
+      if (head.x > W - pad && this.vx > 0) this.vx = -Math.abs(this.vx);
+      if (head.y < pad && this.vy < 0) this.vy = Math.abs(this.vy);
+      if (head.y > H - pad && this.vy > 0) this.vy = -Math.abs(this.vy);
+      // Gentle pull toward screen center when too far from it
+      const cdx = W * 0.5 - head.x;
+      const cdy = H * 0.5 - head.y;
+      const cdist = Math.sqrt(cdx*cdx + cdy*cdy);
+      const centerR = Math.min(W, H) * 0.42;
+      if (cdist > centerR) {
+        const pull = 0.08 * ((cdist - centerR) / centerR);
+        this.vx += (cdx / cdist) * pull;
+        this.vy += (cdy / cdist) * pull;
+      }
+      head.x += this.vx;
+      head.y += this.vy;
+    }
+
+    // Chain follow with slight smoothing
+    for (let i = 1; i < SEG_COUNT; i++) {
+      const prev = this.segs[i-1];
+      const curr = this.segs[i];
+      const dx = prev.x - curr.x;
+      const dy = prev.y - curr.y;
+      const d  = Math.sqrt(dx*dx + dy*dy) + 0.001;
+      if (d > SEG_DIST) {
+        const move = (d - SEG_DIST) / d;
+        curr.x += dx * move * 0.88;  // 0.88 damp = slightly laggy = more organic
+        curr.y += dy * move * 0.88;
+      }
+    }
+  }
+
+  draw(ctx, t, alpha) {
+    const H = pCanvas.height;
+
+    for (let i = 0; i < SEG_COUNT; i++) {
+      const node = this.segs[i];
+      if (node.y > H + 30) continue;
+
+      const taper = 1 - i / SEG_COUNT;
+      const cloud = this.clouds[i];
+
+      for (let p = 0; p < cloud.length; p++) {
+        const pt  = cloud[p];
+        const flk = 0.62 + 0.38 * Math.sin(t * pt.flkS * 2.1 + pt.phase + i * 0.28);  // narrower range = smoother
+        const a   = taper * flk * (0.55 + 0.45 * taper) * alpha;
+        if (a < 0.018) continue;
+
+        // Physics-based offset: apply mouse force to vox/voy, spring back to base
+        {
+          const baseX = node.x + pt.bx;
+          const baseY = node.y + pt.by;
+          // Spring force back to resting position
+          const springK = 0.045;
+          const damp    = 0.82;
+          pt.vox += (pt.bx - pt.ox) * springK;
+          pt.voy += (pt.by - pt.oy) * springK;
+          // Mouse repulsion force
+          if (mouse.active) {
+            const pdx = baseX - mouse.x;
+            const pdy = baseY - mouse.y;
+            const pd  = Math.sqrt(pdx*pdx + pdy*pdy) + 0.1;
+            const PR  = 160;
+            if (pd < PR) {
+              const t2  = 1 - pd / PR;
+              const str = t2 * t2 * 7.5;  // impulse into velocity
+              pt.vox += (pdx / pd) * str;
+              pt.voy += (pdy / pd) * str;
+            }
+          }
+          pt.vox *= damp;
+          pt.voy *= damp;
+          pt.ox  += pt.vox;
+          pt.oy  += pt.voy;
+        }
+
+        let wx = node.x + pt.ox;
+        let wy = node.y + pt.oy;
+
+        // Clamp to screen bounds
+        const W2 = pCanvas.width, H2 = pCanvas.height;
+        const margin = 4;
+        wx = Math.max(margin, Math.min(W2 - margin, wx));
+        wy = Math.max(margin, Math.min(H2 - margin, wy));
+
+        // ── Optimized glow: use cached sprite (drawImage) for large particles ──
+        const glowR = pt.r * 2.8;
+        if (pt.r > 1.5) {
+          const ptPal = DRAGON_PARTICLE_PALETTE[pt.palIdx];
+          const sprite = getGlowSprite(ptPal.hue, glowR);
+          ctx.globalAlpha = a;
+          ctx.drawImage(sprite, wx - glowR - 1, wy - glowR - 1);
+          ctx.globalAlpha = 1;
+        }
+
+        // Core dot — solid fill, no gradient
+        const coreR = Math.max(0.4, pt.r * flk);
+        ctx.beginPath();
+        ctx.arc(wx, wy, coreR, 0, Math.PI*2);
+        const ptPalC = DRAGON_PARTICLE_PALETTE[pt.palIdx];
+        ctx.fillStyle = `hsla(${ptPalC.hue},${ptPalC.sat}%,${ptPalC.light}%,${a})`;
+        ctx.fill();
+      }
     }
   }
 }
 
-function fspawnAt(i) {
-  const scale = fpRingScale[i];
-  const theta = fpTheta[i];
+const dragons = [];
+for (let i = 0; i < NUM_DRAGONS; i++) dragons.push(new Dragon(i));
 
-  const ex = fluidCX + Math.cos(theta) * emitRX * scale;
-  const ey = emitBaseY + Math.sin(theta) * emitRY * scale;
+let dragonT      = 0;
+let prevTransTarget = 0;
 
-  fpx[i] = ex + (Math.random() - 0.5) * 3.5;
-  fpy[i] = ey + (Math.random() - 0.5) * 2.0;
+function updateDragons(dt, ease, ctx) {
+  dragonT += dt;
 
-  fpvx[i] = (Math.random() - 0.5) * 0.12;
-  fpvy[i] = -(0.05 + Math.random() * 0.25);
+  if (transitionTarget === 0 && prevTransTarget === 1) {
+    dragons.forEach(d => d.reset());
+  }
+  prevTransTarget = transitionTarget;
 
-  fpage[i]    = -(Math.random() * LIFETIME_BASE_F * 0.9);
-  fpmaxAge[i] =  LIFETIME_BASE_F + Math.random() * LIFETIME_RAND_F;
-
-  fpNoise[i]    = Math.random() * 800 + i * 6.17;
-  fpColorIdx[i] = pickColorIdx();
-
-  const ringFrac = fpRing[i] / (RING_COUNTS.length - 1);
-  const rnd = Math.random();
-  const baseSize = 1.0 - ringFrac * 0.35;
-  fpSize[i] = rnd < 0.60 ? baseSize * (0.6 + Math.random() * 0.9)
-            : rnd < 0.87 ? baseSize * (2.0 + Math.random() * 2.2)
-                         : baseSize * (4.8 + Math.random() * 4.0);
+  dragons.forEach(d => { d.update(dragonT); d.draw(ctx, dragonT, ease); });
 }
 
-for (let i = 0; i < FTOTAL; i++) fspawnAt(i);
-
-function vortexField(x, y, t) {
-  const dx = x - fluidCX;
-  const dy = y - emitBaseY;
-
-  const radial = Math.abs(dx);
-  const signX  = dx >= 0 ? 1.0 : -1.0;
-
-  const ringR    = emitRX * 0.76;
-  const torusX   = radial - ringR;
-  const torusY   = dy;
-  const torusDist = Math.sqrt(torusX * torusX + torusY * torusY) + 0.001;
-
-  const coreR = emitRX * FLUID_CORE_FRAC;
-
-  const circ = torusDist < coreR
-    ? FLUID_VORTEX_STR * (torusDist / coreR)
-    : FLUID_VORTEX_STR * Math.pow(coreR / torusDist, 1.1);
-
-  const circVX =  (torusY / torusDist) * circ * signX;
-  const circVY = -(torusX / torusDist) * circ;
-
-  const axialDist = Math.abs(dx);
-  const centrality = Math.exp(-axialDist * 0.018);
-  const buoy = FLUID_BUOYANCY * (1.0 + centrality * 3.2);
-
-  const nx = ( Math.sin(x * FLUID_TURB_FREQ + t * 0.28) * Math.cos(y * FLUID_TURB_FREQ * 0.9 - t * 0.21) ) * FLUID_TURB_STR;
-  const ny = ( Math.cos(x * FLUID_TURB_FREQ * 1.1 - t * 0.19) * Math.sin(y * FLUID_TURB_FREQ + t * 0.33) ) * FLUID_TURB_STR;
-
-  return {
-    vx: circVX + nx,
-    vy: circVY - buoy + ny
-  };
-}
-
-function drawParticleAE(ctx, x, y, sz, col, alpha) {
-  const { h, s, l } = col;
-
-  if (sz > 1.5) {
-    const haloR = sz * 5.5;
-    const grd = ctx.createRadialGradient(x, y, 0, x, y, haloR);
-    grd.addColorStop(0,   `hsla(${h},${s}%,${Math.min(l + 30, 80)}%,${alpha * 0.13})`);
-    grd.addColorStop(0.4, `hsla(${h},${s}%,${l + 10}%,${alpha * 0.05})`);
-    grd.addColorStop(1,   `hsla(${h},${s}%,${l}%,0)`);
-    ctx.beginPath();
-    ctx.arc(x, y, haloR, 0, Math.PI * 2);
-    ctx.fillStyle = grd;
-    ctx.fill();
-  }
-
-  if (sz > 0.8) {
-    const midR = sz * 2.2;
-    const grd2 = ctx.createRadialGradient(x, y, 0, x, y, midR);
-    grd2.addColorStop(0,   `hsla(${h},${Math.min(s + 15, 100)}%,${Math.min(l + 40, 88)}%,${alpha * 0.38})`);
-    grd2.addColorStop(0.55,`hsla(${h},${s}%,${l + 12}%,${alpha * 0.15})`);
-    grd2.addColorStop(1,   `hsla(${h},${s}%,${l}%,0)`);
-    ctx.beginPath();
-    ctx.arc(x, y, midR, 0, Math.PI * 2);
-    ctx.fillStyle = grd2;
-    ctx.fill();
-  }
-
-  const coreR = Math.max(0.3, sz * 0.65);
-  ctx.beginPath();
-  ctx.arc(x, y, coreR, 0, Math.PI * 2);
-  ctx.fillStyle = `hsla(${h},${s}%,${l + 8}%,${alpha * 0.92})`;
-  ctx.fill();
-}
-
-let fluidTime = 0;
-let prevTransTarget2 = 0;
-
-function updateFluid(dt, ease, ctx) {
-  fluidTime += dt;
-  const t = fluidTime;
-
-  if (transitionTarget === 0 && prevTransTarget2 === 1) {
-    for (let i = 0; i < FTOTAL; i++) fspawnAt(i);
-  }
-  prevTransTarget2 = transitionTarget;
-
-  for (let i = 0; i < FTOTAL; i++) {
-    fpage[i] += dt * 60;
-
-    if (fpage[i] >= fpmaxAge[i]) { fspawnAt(i); continue; }
-    if (fpage[i] < 0) continue;
-
-    const field = vortexField(fpx[i], fpy[i], t + fpNoise[i] * 0.0008);
-
-    const pt = t * 0.75 + fpNoise[i];
-    const lnx = Math.sin(pt * 1.15 + fpx[i] * 0.008) * 0.11;
-    const lny = Math.cos(pt * 0.85 + fpy[i] * 0.008) * 0.09;
-
-    fpvx[i] = fpvx[i] * FLUID_VISCOSITY + field.vx + lnx;
-    fpvy[i] = fpvy[i] * FLUID_VISCOSITY + field.vy + lny;
-
-    fpx[i] += fpvx[i];
-    fpy[i] += fpvy[i];
-
-    const lifeT  = Math.max(0, fpage[i]) / fpmaxAge[i];
-    const fadeIn  = Math.min(fpage[i] / 24, 1.0);
-    const fadeOut = lifeT > 0.72 ? Math.pow(1 - (lifeT - 0.72) / 0.28, 1.4) : 1.0;
-    const alpha   = fadeIn * fadeOut * ease;
-    if (alpha < 0.007) continue;
-
-    const szPulse = Math.sin(lifeT * Math.PI);
-    const sz = fpSize[i] * (0.35 + szPulse * 0.65);
-    if (sz < 0.18) continue;
-
-    const palBase = PALETTE[fpColorIdx[i]];
-
-    const riseNorm = Math.max(0, Math.min(1, (emitBaseY - fpy[i]) / (fluidH * 0.5)));
-    const col = {
-      h: palBase.h,
-      s: palBase.s,
-      l: palBase.l + riseNorm * 14
-    };
-
-    drawParticleAE(ctx, fpx[i], fpy[i], sz, col, alpha);
-  }
-}
-
-const DUST_COUNT = 55;
+// ─── DUST PARTICLES (optimised: no gradient for tiny ones) ────────────────
+const DUST_COUNT = 40;
 const dust = [];
 
 function spawnDust(randomAge) {
@@ -584,8 +655,8 @@ function spawnDust(randomAge) {
     ax: 0, ay: 0,
     phase: Math.random() * Math.PI * 2,
     phaseSpeed: 0.2 + Math.random() * 0.3,
-    size: 0.6 + Math.random() * 1.1,
-    maxAlpha: 0.25 + Math.random() * 0.45,
+    size: 0.8 + Math.random() * 1.4,
+    maxAlpha: 0.20 + Math.random() * 0.35,
     life: randomAge ? Math.random() * 999 : 0,
     maxLife: 600 + Math.random() * 400,
   };
@@ -600,57 +671,33 @@ function updateDust(dt, ctx) {
   for (const d of dust) {
     d.life += dt * 60;
     if (d.life >= d.maxLife) {
-      const nd = spawnDust(false);
-      nd.x = Math.random() * W;
-      nd.y = Math.random() * H;
-      Object.assign(d, nd);
-      continue;
+      const nd = spawnDust(false); nd.x = Math.random()*W; nd.y = Math.random()*H;
+      Object.assign(d, nd); continue;
     }
-
-    
-    d.ax += (Math.random() - 0.5) * 0.004;
-    d.ay += (Math.random() - 0.5) * 0.004;
-    d.ax *= 0.97;
-    d.ay *= 0.97;
-    d.vx = (d.vx + d.ax) * 0.995;
-    d.vy = (d.vy + d.ay) * 0.995;
-    const spd = Math.sqrt(d.vx * d.vx + d.vy * d.vy);
-    if (spd > 0.18) { d.vx *= 0.18 / spd; d.vy *= 0.18 / spd; }
-
-    d.x += d.vx * dt * 60;
-    d.y += d.vy * dt * 60;
-
-    
-    if (d.x < -5)  d.x = W + 5;
-    if (d.x > W+5) d.x = -5;
-    if (d.y < -5)  d.y = H + 5;
-    if (d.y > H+5) d.y = -5;
+    d.ax += (Math.random()-0.5)*0.004; d.ay += (Math.random()-0.5)*0.004;
+    d.ax *= 0.97; d.ay *= 0.97;
+    d.vx = (d.vx+d.ax)*0.995; d.vy = (d.vy+d.ay)*0.995;
+    const spd = Math.sqrt(d.vx*d.vx+d.vy*d.vy);
+    if (spd > 0.18) { d.vx *= 0.18/spd; d.vy *= 0.18/spd; }
+    d.x += d.vx*dt*60; d.y += d.vy*dt*60;
+    if (d.x < -5) d.x = W+5; if (d.x > W+5) d.x = -5;
+    if (d.y < -5) d.y = H+5; if (d.y > H+5) d.y = -5;
 
     const lifeT = d.life / d.maxLife;
-    const fade  = lifeT < 0.08 ? lifeT / 0.08
-                : lifeT > 0.88 ? (1 - lifeT) / 0.12
-                : 1.0;
-    const flicker = 0.7 + 0.3 * Math.sin(t * d.phaseSpeed + d.phase);
-    const alpha = fade * flicker * d.maxAlpha;
+    const fade  = lifeT < 0.08 ? lifeT/0.08 : lifeT > 0.88 ? (1-lifeT)/0.12 : 1.0;
+    const flicker = 0.7 + 0.3*Math.sin(t*d.phaseSpeed+d.phase);
+    const alpha = fade*flicker*d.maxAlpha;
     if (alpha < 0.01) continue;
 
-    const r = d.size;
-    if (r > 0.9) {
-      const grd = ctx.createRadialGradient(d.x, d.y, 0, d.x, d.y, r * 3.5);
-      grd.addColorStop(0, `rgba(255,255,255,${alpha * 0.5})`);
-      grd.addColorStop(1, `rgba(255,255,255,0)`);
-      ctx.beginPath();
-      ctx.arc(d.x, d.y, r * 3.5, 0, Math.PI * 2);
-      ctx.fillStyle = grd;
-      ctx.fill();
-    }
+    // Simple dot only — no radial gradient per dust particle
     ctx.beginPath();
-    ctx.arc(d.x, d.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+    ctx.arc(d.x, d.y, d.size, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(210,200,180,${alpha})`;  // warm off-white to match palette
     ctx.fill();
   }
 }
 
+// ─── MAIN PARTICLE LOOP ───────────────────────────────────────────────────
 let lastPTime = performance.now();
 
 function updateParticles(now) {
@@ -664,6 +711,7 @@ function updateParticles(now) {
   const W = pCanvas.width, H = pCanvas.height;
   pCtx.clearRect(0, 0, W, H);
 
+  // Rising sphere particles
   if (pAlpha > 0.01) {
     for (const p of particles) {
       p.life += dt;
@@ -688,17 +736,19 @@ function updateParticles(now) {
     }
   }
 
+  // Dragons
   if (ease > 0.01) {
-    updateFluid(dt, ease, pCtx);
+    updateDragons(dt, ease, pCtx);
   }
 
-  
+  // Dust
   updateDust(dt, pCtx);
 
   requestAnimationFrame(updateParticles);
 }
 requestAnimationFrame(updateParticles);
 
+// ─── THREE.JS SPIRALS ─────────────────────────────────────────────────────
 async function initThree() {
   await loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js');
 
@@ -811,6 +861,7 @@ async function initThree() {
 
 initThree().catch(e => console.error('Three init error:', e));
 
+// ─── WEBGL SPHERE RENDER LOOP ─────────────────────────────────────────────
 const SPHERE_DROP_PX = 70;
 
 gl.enable(gl.BLEND);
@@ -823,17 +874,13 @@ function render(now) {
   const dt = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
 
-  
-  
-  
   const N = TOTAL_FRAMES - 1, cycle = 2 * N;
   const pNorm = ((fPos % cycle) + cycle) % cycle;
   const curFrame = pNorm <= N ? pNorm : cycle - pNorm;
 
-  
-  const edgeFrac = 1 - Math.abs(curFrame / N * 2 - 1); 
-  const EDGE_BOOST = 3.5;  
-  const EDGE_WIDTH = 0.18; 
+  const edgeFrac = 1 - Math.abs(curFrame / N * 2 - 1);
+  const EDGE_BOOST = 3.5;
+  const EDGE_WIDTH = 0.18;
   const boost = 1 + (EDGE_BOOST - 1) * Math.max(0, (edgeFrac - (1 - EDGE_WIDTH)) / EDGE_WIDTH);
 
   fPos += fSpeed * boost * dt;
