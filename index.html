@@ -386,7 +386,8 @@ function noise2(x, y) {
 const NUM_DRAGONS       = 5;
 const SEG_COUNT         = 15;
 const SEG_DIST          = 20;
-const PARTICLES_PER_SEG = 8;
+// Увеличено количество частиц на сегмент (было 8, стало 22)
+const PARTICLES_PER_SEG = 22;
 const MOUSE_REPEL_R     = 140;
 const MOUSE_REPEL_STR   = 4.5;
 
@@ -421,7 +422,8 @@ class Dragon {
           ox: bx, oy: by,
           bx, by,
           vox: 0, voy: 0,
-          r:      3.0 + Math.random() * 6.5 * (1 - i / SEG_COUNT * 0.6),
+          // Чуть больше сферных частиц
+          r:      0.8 + Math.random() * 1.4 * (1 - i / SEG_COUNT * 0.4),
           phase:  Math.random() * Math.PI * 2,
           flkS:   0.2 + Math.random() * 0.8,
           palIdx: Math.floor(Math.random() * DRAGON_PARTICLE_PALETTE.length),
@@ -562,8 +564,9 @@ class Dragon {
         wx = Math.max(4, Math.min(pCanvas.width  - 4, wx));
         wy = Math.max(4, Math.min(pCanvas.height - 4, wy));
 
-        const glowR = pt.r * 2.4;
-        if (pt.r > 2.0) {
+        // Размер glow теперь пропорционален маленькому размеру частицы (аналогично sz*3 у сферных)
+        const glowR = pt.r * 3.0;
+        if (pt.r > 0.4) {
           const ptPal = DRAGON_PARTICLE_PALETTE[pt.palIdx];
           const sprite = getGlowSprite(ptPal.hue, glowR);
           ctx.globalAlpha = a * 0.45;
@@ -571,11 +574,12 @@ class Dragon {
           ctx.globalAlpha = 1;
         }
 
-        const coreR  = Math.max(0.6, pt.r * flk);
+        // Ядро частицы: маленькое и яркое как у сферных частиц
+        const coreR  = Math.max(0.3, pt.r * flk * 0.6);
         const ptPalC = DRAGON_PARTICLE_PALETTE[pt.palIdx];
         ctx.beginPath();
         ctx.arc(wx, wy, coreR, 0, Math.PI * 2);
-        ctx.fillStyle = `hsla(${ptPalC.hue},${ptPalC.sat}%,${ptPalC.light}%,${a})`;
+        ctx.fillStyle = `hsla(${ptPalC.hue},${ptPalC.sat}%,${ptPalC.light + 15}%,${a})`;
         ctx.fill();
       }
     }
