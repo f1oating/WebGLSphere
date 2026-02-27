@@ -186,7 +186,7 @@ gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new
 
 function loadScript(src) {
   return new Promise((res, rej) => {
-    if (document.querySelector(`script[src="${src}"]`)) { res(); return; }
+    if (document.querySelector('script[src="' + src + '"]')) { res(); return; }
     const s = document.createElement('script');
     s.src = src; s.onload = res; s.onerror = rej;
     document.head.appendChild(s);
@@ -195,44 +195,33 @@ function loadScript(src) {
 
 async function loadKTX2(url) {
   const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
   const ab = await resp.arrayBuffer();
-
   const MAGIC = [0xAB,0x4B,0x54,0x58,0x20,0x32,0x30,0xBB,0x0D,0x0A,0x1A,0x0A];
   const bytes = new Uint8Array(ab);
   for (let i = 0; i < 12; i++)
     if (bytes[i] !== MAGIC[i]) throw new Error('Not a KTX2 file');
-
   await loadScript('https://cdn.jsdelivr.net/npm/@loaders.gl/textures@3.4.15/dist/libs/basis_transcoder.js');
-
   const BASIS = await window.BASIS({
     locateFile: f => f.endsWith('.wasm')
-      ? 'https://cdn.jsdelivr.net/npm/@loaders.gl/textures@3.4.15/dist/libs/basis_transcoder.wasm'
-      : f
+      ? 'https://cdn.jsdelivr.net/npm/@loaders.gl/textures@3.4.15/dist/libs/basis_transcoder.wasm' : f
   });
   BASIS.initializeBasis();
-
   const extETC2 = gl.getExtension('WEBGL_compressed_texture_etc');
   const extS3TC = gl.getExtension('WEBGL_compressed_texture_s3tc');
   const extASTC = gl.getExtension('WEBGL_compressed_texture_astc');
-
   let basisFmt, glCompFmt;
   if      (extETC2) { basisFmt = 1;  glCompFmt = extETC2.COMPRESSED_RGBA8_ETC2_EAC; }
   else if (extS3TC) { basisFmt = 3;  glCompFmt = extS3TC.COMPRESSED_RGBA_S3TC_DXT5_EXT; }
   else if (extASTC) { basisFmt = 10; glCompFmt = extASTC.COMPRESSED_RGBA_ASTC_4x4_KHR; }
   else              { basisFmt = 13; glCompFmt = null; }
-
   const ktx2 = new BASIS.KTX2File(new Uint8Array(ab));
   if (!ktx2.isValid())          throw new Error('KTX2File.isValid() = false');
   if (!ktx2.startTranscoding()) throw new Error('startTranscoding() failed');
-
-  const w = ktx2.getWidth();
-  const h = ktx2.getHeight();
-
+  const w = ktx2.getWidth(), h = ktx2.getHeight();
   let size = ktx2.getImageTranscodedSizeInBytes(0, 0, 0, basisFmt);
   let data = new Uint8Array(size);
   let ok   = ktx2.transcodeImage(data, 0, 0, 0, basisFmt, 0, -1, -1);
-
   if (!ok && basisFmt !== 13) {
     basisFmt = 13; glCompFmt = null;
     size = ktx2.getImageTranscodedSizeInBytes(0, 0, 0, 13);
@@ -240,30 +229,25 @@ async function loadKTX2(url) {
     ok   = ktx2.transcodeImage(data, 0, 0, 0, 13, 0, -1, -1);
   }
   if (!ok) throw new Error('transcodeImage failed');
-
   ktx2.close(); ktx2.delete();
-
   gl.bindTexture(gl.TEXTURE_2D, tex);
   if (glCompFmt !== null) {
     gl.compressedTexImage2D(gl.TEXTURE_2D, 0, glCompFmt, w, h, 0, data);
   } else {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
   }
-
   if (glCompFmt === null) {
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
   } else {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   }
-
   const af = gl.getExtension('EXT_texture_filter_anisotropic') ||
              gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic');
   if (af) {
     const max = gl.getParameter(af.MAX_TEXTURE_MAX_ANISOTROPY_EXT);
     gl.texParameterf(gl.TEXTURE_2D, af.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(max, 8));
   }
-
   canvas.style.opacity = '1';
 }
 
@@ -315,7 +299,7 @@ window.addEventListener('mouseleave', () => { mouse.active = false; });
 
 const GLOW_CACHE = new Map();
 function getGlowSprite(hue, radius) {
-  const key = `${hue}_${Math.round(radius)}`;
+  const key = hue + '_' + Math.round(radius);
   if (GLOW_CACHE.has(key)) return GLOW_CACHE.get(key);
   const sz = Math.ceil(radius * 2) + 2;
   const oc = document.createElement('canvas');
@@ -323,9 +307,9 @@ function getGlowSprite(hue, radius) {
   const ox = oc.getContext('2d');
   const cx = sz / 2, cy = sz / 2;
   const grd = ox.createRadialGradient(cx, cy, 0, cx, cy, radius);
-  grd.addColorStop(0,    `hsla(${hue},70%,82%,0.55)`);
-  grd.addColorStop(0.45, `hsla(${hue},65%,55%,0.18)`);
-  grd.addColorStop(1,    `hsla(${hue},60%,38%,0)`);
+  grd.addColorStop(0,    'hsla(' + hue + ',70%,82%,0.55)');
+  grd.addColorStop(0.45, 'hsla(' + hue + ',65%,55%,0.18)');
+  grd.addColorStop(1,    'hsla(' + hue + ',60%,38%,0)');
   ox.beginPath();
   ox.arc(cx, cy, radius, 0, Math.PI * 2);
   ox.fillStyle = grd;
@@ -373,23 +357,17 @@ for (let i = 0; i < PARTICLE_COUNT; i++) {
   particles.push(p);
 }
 
-function hash(n) { return ((Math.sin(n * 127.1 + 311.7) * 43758.5453) % 1 + 1) % 1; }
-function noise2(x, y) {
-  const ix = Math.floor(x), iy = Math.floor(y);
-  const fx = x - ix, fy = y - iy;
-  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
-  const a = hash(ix + iy * 57), b = hash(ix + 1 + iy * 57);
-  const c = hash(ix + (iy + 1) * 57), d = hash(ix + 1 + (iy + 1) * 57);
-  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
-}
-
 const NUM_DRAGONS       = 5;
 const SEG_COUNT         = 15;
 const SEG_DIST          = 20;
-// Увеличено количество частиц на сегмент (было 8, стало 22)
 const PARTICLES_PER_SEG = 22;
 const MOUSE_REPEL_R     = 140;
 const MOUSE_REPEL_STR   = 4.5;
+
+// ── Общий ураган ──────────────────────────────────────────
+// Все дракончики вращаются вокруг одного центра (низ экрана),
+// постепенно поднимаясь и сужая радиус — как настоящий торнадо.
+// Каждый дракон смещён по фазе (angle offset) чтобы не накладываться.
 
 class Dragon {
   constructor(id) {
@@ -400,8 +378,37 @@ class Dragon {
   reset() {
     const W = pCanvas.width;
     const H = pCanvas.height;
-    const startX = (0.10 + this.id * 0.20) * W;
-    const startY = H + 40 + SEG_COUNT * SEG_DIST;
+
+    // Центр воронки урагана — низ экрана, примерно на 85%
+    // Он общий для всех дракончиков (задаётся глобально)
+    // Каждый дракон просто знает свою фазу смещения
+    this.phaseOffset = (this.id / NUM_DRAGONS) * Math.PI * 2;
+
+    // Начальный угол = смещение фазы
+    this.angle = this.phaseOffset;
+
+    // Начальный радиус — широкий, как нижняя часть воронки торнадо
+    // Снизу широко, сверху узко
+    this.tornadoProgress = 0; // 0 = начало (низ, широко), 1 = конец (середина, узко)
+
+    // Скорость вращения (все в одну сторону — это ураган!)
+    this.angularSpeed = 0.045 + this.id * 0.004; // чуть разная скорость для органичности
+
+    // Скорость подъёма по воронке
+    this.riseSpeed = 0.0028 + Math.random() * 0.001;
+
+    // Стартовая позиция — все начинают снизу
+    const tornadoCX = W * 0.5;
+    const tornadoBaseY = H + 60; // основание воронки за нижним краем
+    const tornadoTopY  = H * 0.42; // вершина воронки — середина экрана
+
+    // Радиус воронки: снизу широкий, сверху узкий (конус)
+    const baseRadius = Math.min(W, H) * 0.45;
+    const topRadius  = Math.min(W, H) * 0.08;
+
+    const r = baseRadius; // стартовый радиус
+    const startX = tornadoCX + Math.cos(this.angle) * r;
+    const startY = tornadoBaseY;
 
     this.segs = [];
     for (let i = 0; i < SEG_COUNT; i++) {
@@ -415,14 +422,11 @@ class Dragon {
       const spread = 75 * (1 - i / SEG_COUNT * 0.5) + 18;
       for (let p = 0; p < count; p++) {
         const ang = Math.random() * Math.PI * 2;
-        const r   = (0.3 + Math.random() * 0.7) * spread;
-        const bx  = Math.cos(ang) * r;
-        const by  = Math.sin(ang) * r;
+        const r2  = (0.3 + Math.random() * 0.7) * spread;
         puff.push({
-          ox: bx, oy: by,
-          bx, by,
+          ox: Math.cos(ang)*r2, oy: Math.sin(ang)*r2,
+          bx: Math.cos(ang)*r2, by: Math.sin(ang)*r2,
           vox: 0, voy: 0,
-          // Чуть больше сферных частиц
           r:      0.8 + Math.random() * 1.4 * (1 - i / SEG_COUNT * 0.4),
           phase:  Math.random() * Math.PI * 2,
           flkS:   0.2 + Math.random() * 0.8,
@@ -432,28 +436,18 @@ class Dragon {
       this.clouds.push(puff);
     }
 
-    this.speed       = 3.5 + Math.random() * 1.5;
-    this.vx          = 0;
-    this.vy          = -this.speed;
-    this.riseAngle   = Math.random() * Math.PI * 2;
-    this.riseSpinDir = Math.random() < 0.5 ? 1 : -1;
-    this.riseSpinR   = 20 + Math.random() * 30;
-    this.riseSpinSpd = 0.012 + Math.random() * 0.01;
-    this.noiseOffX   = Math.random() * 100;
-    this.noiseOffY   = Math.random() * 100;
-    this.risen       = false;
+    this.vx    = 0;
+    this.vy    = 0;
+    this.risen = false;
 
+    // После того как дракон вышел из воронки — орбита
     const orbitBand = 0.12 + (this.id / NUM_DRAGONS) * 0.30;
     this.orbitR     = Math.min(W, H) * (orbitBand + Math.random() * 0.08);
-    this.orbitDir   = this.id % 2 === 0 ? 1 : -1;
+    this.orbitDir   = 1; // все продолжают крутиться в ту же сторону
     this.orbitSpd   = (0.00025 + Math.random() * 0.00015) * this.orbitDir;
-    this.orbitAngle = (this.id / NUM_DRAGONS) * Math.PI * 2 + Math.random() * 0.8;
-    this.orbitCX    = W * 0.5 + (Math.random() - 0.5) * W * 0.12;
-    this.orbitCY    = H * 0.5 + (Math.random() - 0.5) * H * 0.12;
-    this.noiseSpd   = 0.00006 + Math.random() * 0.00008;
-
-    const bandH = 0.80 / NUM_DRAGONS;
-    this.riseY  = H * (0.08 + bandH * this.id + Math.random() * bandH);
+    this.orbitAngle = this.angle;
+    this.orbitCX    = tornadoCX;
+    this.orbitCY    = H * 0.5 + (Math.random() - 0.5) * H * 0.1;
   }
 
   update(t, dt) {
@@ -462,22 +456,56 @@ class Dragon {
     const head = this.segs[0];
 
     if (!this.risen) {
-      this.riseAngle += this.riseSpinSpd * this.riseSpinDir;
-      const spiralX = Math.cos(this.riseAngle) * this.riseSpinR * 0.06;
-      this.vx = spiralX;
-      this.vy = -this.speed;
-      head.x += this.vx * dt * 60;
-      head.y += this.vy * dt * 60;
+      // ── УРАГАН: воронка торнадо ──
+      // Прогресс подъёма: 0 (низ) → 1 (середина)
+      this.tornadoProgress += this.riseSpeed * dt * 60;
+      if (this.tornadoProgress > 1) this.tornadoProgress = 1;
 
-      if (head.y <= this.riseY) {
+      const p = this.tornadoProgress;
+
+      // Центр воронки — вертикальная ось торнадо
+      const tornadoCX   = W * 0.5;
+      const tornadoBaseY = H + 60;
+      const tornadoTopY  = H * 0.42;
+
+      // Текущая высота (Y уменьшается при подъёме)
+      // Используем ease-in чтобы сначала медленно, потом быстрее
+      const easedP  = p * p * (3 - 2 * p); // smoothstep
+      const currentY = tornadoBaseY + (tornadoTopY - tornadoBaseY) * easedP;
+
+      // Радиус воронки сужается снизу вверх (конус торнадо)
+      const baseRadius = Math.min(W, H) * 0.48;
+      const topRadius  = Math.min(W, H) * 0.06;
+      const currentR   = baseRadius + (topRadius - baseRadius) * easedP;
+
+      // Угловая скорость увеличивается при сужении (закон сохранения момента импульса!)
+      // Чем уже — тем быстрее крутится, как фигуристка складывает руки
+      const spinScale = baseRadius / Math.max(currentR, 1);
+      this.angle += this.angularSpeed * spinScale * dt * 60;
+
+      // Целевая позиция по воронке
+      const targetX = tornadoCX + Math.cos(this.angle) * currentR;
+      const targetY = currentY;
+
+      // Плавное следование с инерцией
+      const followK = 0.14;
+      this.vx = (targetX - head.x) * followK;
+      this.vy = (targetY - head.y) * followK;
+      head.x += this.vx;
+      head.y += this.vy;
+
+      // Переход в орбиту когда достигли вершины воронки
+      if (this.tornadoProgress >= 1.0) {
         this.risen      = true;
-        this.orbitCX    = W * 0.5 + (Math.random() - 0.5) * W * 0.10;
-        this.orbitCY    = H * 0.5 + (Math.random() - 0.5) * H * 0.10;
-        this.orbitAngle = Math.atan2(head.y - this.orbitCY, head.x - this.orbitCX);
+        this.orbitAngle = this.angle;
+        this.orbitCX    = tornadoCX + (Math.random() - 0.5) * W * 0.06;
+        this.orbitCY    = tornadoTopY + (Math.random() - 0.5) * H * 0.08;
         this.vx = 0;
         this.vy = 0;
       }
+
     } else {
+      // ── Орбитальное движение ──
       this.orbitAngle += this.orbitSpd * dt * 60;
 
       const targetX = this.orbitCX + Math.cos(this.orbitAngle) * this.orbitR;
@@ -507,6 +535,7 @@ class Dragon {
       head.y += this.vy;
     }
 
+    // Хвост тянется за головой
     for (let i = 1; i < SEG_COUNT; i++) {
       const prev = this.segs[i - 1];
       const curr = this.segs[i];
@@ -526,7 +555,7 @@ class Dragon {
 
     for (let i = 0; i < SEG_COUNT; i++) {
       const node = this.segs[i];
-      if (node.y > H + 30) continue;
+      if (node.y > H + 60) continue;
 
       const taper = 1 - i / SEG_COUNT;
       const cloud = this.clouds[i];
@@ -554,17 +583,14 @@ class Dragon {
           }
         }
 
-        pt.vox *= 0.92;
-        pt.voy *= 0.92;
-        pt.ox  += pt.vox;
-        pt.oy  += pt.voy;
+        pt.vox *= 0.92; pt.voy *= 0.92;
+        pt.ox  += pt.vox; pt.oy  += pt.voy;
 
         let wx = node.x + pt.ox;
         let wy = node.y + pt.oy;
         wx = Math.max(4, Math.min(pCanvas.width  - 4, wx));
         wy = Math.max(4, Math.min(pCanvas.height - 4, wy));
 
-        // Размер glow теперь пропорционален маленькому размеру частицы (аналогично sz*3 у сферных)
         const glowR = pt.r * 3.0;
         if (pt.r > 0.4) {
           const ptPal = DRAGON_PARTICLE_PALETTE[pt.palIdx];
@@ -574,12 +600,11 @@ class Dragon {
           ctx.globalAlpha = 1;
         }
 
-        // Ядро частицы: маленькое и яркое как у сферных частиц
         const coreR  = Math.max(0.3, pt.r * flk * 0.6);
         const ptPalC = DRAGON_PARTICLE_PALETTE[pt.palIdx];
         ctx.beginPath();
         ctx.arc(wx, wy, coreR, 0, Math.PI * 2);
-        ctx.fillStyle = `hsla(${ptPalC.hue},${ptPalC.sat}%,${ptPalC.light + 15}%,${a})`;
+        ctx.fillStyle = 'hsla(' + ptPalC.hue + ',' + ptPalC.sat + '%,' + (ptPalC.light + 15) + '%,' + a + ')';
         ctx.fill();
       }
     }
@@ -623,7 +648,6 @@ for (let i = 0; i < DUST_COUNT; i++) dust.push(spawnDust(true));
 function updateDust(dt, ctx) {
   const W = pCanvas.width, H = pCanvas.height;
   const t = performance.now() / 1000;
-
   for (const d of dust) {
     d.life += dt * 60;
     if (d.life >= d.maxLife) {
@@ -638,16 +662,14 @@ function updateDust(dt, ctx) {
     d.x += d.vx * dt * 60; d.y += d.vy * dt * 60;
     if (d.x < -5) d.x = W + 5; if (d.x > W + 5) d.x = -5;
     if (d.y < -5) d.y = H + 5; if (d.y > H + 5) d.y = -5;
-
     const lifeT   = d.life / d.maxLife;
     const fade    = lifeT < 0.08 ? lifeT / 0.08 : lifeT > 0.88 ? (1 - lifeT) / 0.12 : 1.0;
     const flicker = 0.7 + 0.3 * Math.sin(t * d.phaseSpeed + d.phase);
     const alpha   = fade * flicker * d.maxAlpha;
     if (alpha < 0.01) continue;
-
     ctx.beginPath();
     ctx.arc(d.x, d.y, d.size, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(210,200,180,${alpha})`;
+    ctx.fillStyle = 'rgba(210,200,180,' + alpha + ')';
     ctx.fill();
   }
 }
@@ -679,18 +701,17 @@ function updateParticles(now) {
       const sz = p.size * (1 - t * 0.3);
       if (sz < 0.05 || a < 0.01) continue;
       const grd = pCtx.createRadialGradient(p.x, p.y, 0, p.x, p.y, sz * 3);
-      grd.addColorStop(0,   `hsla(${p.hue},100%,85%,${a})`);
-      grd.addColorStop(0.4, `hsla(${p.hue},100%,60%,${a * 0.6})`);
-      grd.addColorStop(1,   `hsla(${p.hue},100%,40%,0)`);
+      grd.addColorStop(0,   'hsla(' + p.hue + ',100%,85%,' + a + ')');
+      grd.addColorStop(0.4, 'hsla(' + p.hue + ',100%,60%,' + (a * 0.6) + ')');
+      grd.addColorStop(1,   'hsla(' + p.hue + ',100%,40%,0)');
       pCtx.beginPath(); pCtx.arc(p.x, p.y, sz * 3, 0, Math.PI * 2);
       pCtx.fillStyle = grd; pCtx.fill();
       pCtx.beginPath(); pCtx.arc(p.x, p.y, sz * 0.6, 0, Math.PI * 2);
-      pCtx.fillStyle = `hsla(${p.hue},80%,95%,${a})`; pCtx.fill();
+      pCtx.fillStyle = 'hsla(' + p.hue + ',80%,95%,' + a + ')'; pCtx.fill();
     }
   }
 
   if (ease > 0.01) updateDragons(dt, ease, pCtx);
-
   updateDust(dt, pCtx);
 
   requestAnimationFrame(updateParticles);
@@ -699,7 +720,6 @@ requestAnimationFrame(updateParticles);
 
 async function initThree() {
   await loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js');
-
   await new Promise((res, rej) => {
     const s = document.createElement('script');
     s.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js';
@@ -787,20 +807,15 @@ async function initThree() {
     requestAnimationFrame(renderThree);
     const dt = Math.min((now - lastT) / 1000, 0.05);
     lastT = now;
-
     const ease = transitionT * transitionT * (3 - 2 * transitionT);
     const dropWorldUnits = (40 / window.innerHeight) * worldHalfH * 2;
     const targetY = HIDDEN_Y + (REST_Y - dropWorldUnits - HIDDEN_Y) * ease;
-
     spiralGroupR.position.y = targetY;
     spiralGroupL.position.y = targetY;
-
     for (const m of spiralMatsR) m.opacity = ease;
     for (const m of spiralMatsL) m.opacity = ease;
-
     pivotR.rotation.y -= ROT_SPEED * dt;
     pivotL.rotation.y += ROT_SPEED * dt;
-
     renderer.render(scene, camera);
   }
   requestAnimationFrame(renderThree);
@@ -823,18 +838,16 @@ function render(now) {
   const N = TOTAL_FRAMES - 1, cycle = 2 * N;
   const pNorm    = ((fPos % cycle) + cycle) % cycle;
   const curFrame = pNorm <= N ? pNorm : cycle - pNorm;
-
   const edgeFrac  = 1 - Math.abs(curFrame / N * 2 - 1);
   const EDGE_BOOST = 3.5;
   const EDGE_WIDTH = 0.18;
   const boost = 1 + (EDGE_BOOST - 1) * Math.max(0, (edgeFrac - (1 - EDGE_WIDTH)) / EDGE_WIDTH);
-
   fPos += fSpeed * boost * dt;
   const p2     = ((fPos % cycle) + cycle) % cycle;
   const fExact = p2 <= N ? p2 : cycle - p2;
 
   const dropEase = transitionT * transitionT * (3 - 2 * transitionT);
-  container.style.transform = `translateY(${dropEase * SPHERE_DROP_PX}px)`;
+  container.style.transform = 'translateY(' + (dropEase * SPHERE_DROP_PX) + 'px)';
 
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.clearColor(0, 0, 0, 0);
