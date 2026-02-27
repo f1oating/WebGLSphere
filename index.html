@@ -357,7 +357,7 @@ for (let i = 0; i < PARTICLE_COUNT; i++) {
   particles.push(p);
 }
 
-const NUM_DRAGONS       = 5;
+const NUM_DRAGONS       = 7;
 const SEG_COUNT         = 15;
 const SEG_DIST          = 20;
 const PARTICLES_PER_SEG = 22;
@@ -389,7 +389,8 @@ class Dragon {
 
     // Начальный радиус — широкий, как нижняя часть воронки торнадо
     // Снизу широко, сверху узко
-    this.tornadoProgress = 0; // 0 = начало (низ, широко), 1 = конец (середина, узко)
+    this.tornadoProgress = 0.05 + (this.id / NUM_DRAGONS) * 0.55 + Math.random() * 0.1;
+    this.fadeIn = 0;
 
     // Скорость вращения (все в одну сторону — это ураган!)
     this.angularSpeed = 0.045 + this.id * 0.004; // чуть разная скорость для органичности
@@ -408,7 +409,10 @@ class Dragon {
 
     const r = baseRadius; // стартовый радиус
     const startX = tornadoCX + Math.cos(this.angle) * r;
-    const startY = tornadoBaseY;
+    // Стартовая позиция — уже в воздухе в воронке
+    const initP = this.tornadoProgress;
+    const initEasedP = initP * initP * (3 - 2 * initP);
+    const startY = tornadoBaseY + (tornadoTopY - tornadoBaseY) * initEasedP;
 
     this.segs = [];
     for (let i = 0; i < SEG_COUNT; i++) {
@@ -444,7 +448,7 @@ class Dragon {
     const orbitBand = 0.12 + (this.id / NUM_DRAGONS) * 0.30;
     this.orbitR     = Math.min(W, H) * (orbitBand + Math.random() * 0.08);
     this.orbitDir   = 1; // все продолжают крутиться в ту же сторону
-    this.orbitSpd   = (0.00025 + Math.random() * 0.00015) * this.orbitDir;
+    this.orbitSpd   = (0.0018 + Math.random() * 0.001) * this.orbitDir;
     this.orbitAngle = this.angle;
     this.orbitCX    = tornadoCX;
     this.orbitCY    = H * 0.5 + (Math.random() - 0.5) * H * 0.1;
@@ -459,6 +463,7 @@ class Dragon {
       // ── УРАГАН: воронка торнадо ──
       // Прогресс подъёма: 0 (низ) → 1 (середина)
       this.tornadoProgress += this.riseSpeed * dt * 60;
+      this.fadeIn = Math.min(1, this.fadeIn + dt * 2.5);
       if (this.tornadoProgress > 1) this.tornadoProgress = 1;
 
       const p = this.tornadoProgress;
@@ -474,14 +479,10 @@ class Dragon {
       const currentY = tornadoBaseY + (tornadoTopY - tornadoBaseY) * easedP;
 
       // Радиус воронки сужается снизу вверх (конус торнадо)
-      const baseRadius = Math.min(W, H) * 0.48;
-      const topRadius  = Math.min(W, H) * 0.06;
-      const currentR   = baseRadius + (topRadius - baseRadius) * easedP;
+      // Радиус всегда одинаковый — цилиндр, а не конус
+      const currentR = Math.min(W, H) * 0.38;
 
-      // Угловая скорость увеличивается при сужении (закон сохранения момента импульса!)
-      // Чем уже — тем быстрее крутится, как фигуристка складывает руки
-      const spinScale = baseRadius / Math.max(currentR, 1);
-      this.angle += this.angularSpeed * spinScale * dt * 60;
+      this.angle += this.angularSpeed * dt * 60;
 
       // Целевая позиция по воронке
       const targetX = tornadoCX + Math.cos(this.angle) * currentR;
@@ -511,12 +512,12 @@ class Dragon {
       const targetX = this.orbitCX + Math.cos(this.orbitAngle) * this.orbitR;
       const targetY = this.orbitCY + Math.sin(this.orbitAngle) * this.orbitR * 0.5;
 
-      const ax = (targetX - head.x) * 0.012;
-      const ay = (targetY - head.y) * 0.012;
-      this.vx = (this.vx + ax) * 0.94;
-      this.vy = (this.vy + ay) * 0.94;
+      const ax = (targetX - head.x) * 0.028;
+      const ay = (targetY - head.y) * 0.028;
+      this.vx = (this.vx + ax) * 0.92;
+      this.vy = (this.vy + ay) * 0.92;
 
-      const maxSpd = 4.0;
+      const maxSpd = 10.0;
       const spd = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
       if (spd > maxSpd) { this.vx *= maxSpd / spd; this.vy *= maxSpd / spd; }
 
@@ -563,7 +564,8 @@ class Dragon {
       for (let p = 0; p < cloud.length; p++) {
         const pt  = cloud[p];
         const flk = 0.62 + 0.38 * Math.sin(t * pt.flkS * 2.1 + pt.phase + i * 0.28);
-        const a   = taper * flk * (0.55 + 0.45 * taper) * alpha;
+        const fadeAlpha = this.risen ? 1 : this.fadeIn;
+        const a   = taper * flk * (0.55 + 0.45 * taper) * alpha * fadeAlpha;
         if (a < 0.018) continue;
 
         pt.vox += (pt.bx - pt.ox) * 0.018;
