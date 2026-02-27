@@ -357,7 +357,7 @@ for (let i = 0; i < PARTICLE_COUNT; i++) {
   particles.push(p);
 }
 
-const NUM_DRAGONS       = 7;
+const NUM_DRAGONS       = 12;
 const SEG_COUNT         = 15;
 const SEG_DIST          = 20;
 const PARTICLES_PER_SEG = 22;
@@ -445,13 +445,23 @@ class Dragon {
     this.risen = false;
 
     // После того как дракон вышел из воронки — орбита
-    const orbitBand = 0.12 + (this.id / NUM_DRAGONS) * 0.30;
-    this.orbitR     = Math.min(W, H) * (orbitBand + Math.random() * 0.08);
+    // Частицы облака разлетаются ~90px от головы — держим такой отступ от краёв
+    const EDGE_MARGIN = 95;
+    // Орбитальный радиус — от маленького до большого, равномерно по драконам
+    const orbitBand = 0.08 + (this.id / NUM_DRAGONS) * 0.36;
+    this.orbitR = Math.min(W, H) * (orbitBand + Math.random() * 0.06);
+    // Центр орбиты выбирается так чтобы голова + облако не выходили за край
+    const maxCX = W - EDGE_MARGIN - this.orbitR;
+    const minCX = EDGE_MARGIN + this.orbitR;
+    const maxCY = H - EDGE_MARGIN - this.orbitR * 0.5;
+    const minCY = EDGE_MARGIN + this.orbitR * 0.5;
+    this.orbitCX = Math.max(minCX, Math.min(maxCX, W * 0.5 + (Math.random() - 0.5) * (W - 2*(EDGE_MARGIN + this.orbitR))));
+    this.orbitCY_val = Math.max(minCY, Math.min(maxCY, H * 0.5 + (Math.random() - 0.5) * (H - 2*(EDGE_MARGIN + this.orbitR * 0.5))));
     this.orbitDir   = 1; // все продолжают крутиться в ту же сторону
     this.orbitSpd   = (0.0018 + Math.random() * 0.001) * this.orbitDir;
     this.orbitAngle = this.angle;
     this.orbitCX    = tornadoCX;
-    this.orbitCY    = H * 0.5 + (Math.random() - 0.5) * H * 0.1;
+    this.orbitCY    = this.orbitCY_val;
   }
 
   update(t, dt) {
@@ -480,7 +490,7 @@ class Dragon {
 
       // Радиус воронки сужается снизу вверх (конус торнадо)
       // Радиус всегда одинаковый — цилиндр, а не конус
-      const currentR = Math.min(W, H) * 0.38;
+      const currentR = Math.min(W * 0.52, H * 0.52);
 
       this.angle += this.angularSpeed * dt * 60;
 
@@ -499,8 +509,10 @@ class Dragon {
       if (this.tornadoProgress >= 1.0) {
         this.risen      = true;
         this.orbitAngle = this.angle;
-        this.orbitCX    = tornadoCX + (Math.random() - 0.5) * W * 0.06;
-        this.orbitCY    = tornadoTopY + (Math.random() - 0.5) * H * 0.08;
+        const EM2 = 95;
+        const clampedR = this.orbitR;
+        this.orbitCX = Math.max(EM2 + clampedR, Math.min(W - EM2 - clampedR, tornadoCX + (Math.random() - 0.5) * W * 0.3));
+        this.orbitCY = Math.max(EM2 + clampedR * 0.5, Math.min(H - EM2 - clampedR * 0.5, tornadoTopY + (Math.random() - 0.5) * H * 0.25));
         this.vx = 0;
         this.vy = 0;
       }
@@ -511,6 +523,12 @@ class Dragon {
 
       const targetX = this.orbitCX + Math.cos(this.orbitAngle) * this.orbitR;
       const targetY = this.orbitCY + Math.sin(this.orbitAngle) * this.orbitR * 0.5;
+      // Мягко отталкиваем от краёв если вдруг вышли
+      const EM = 95;
+      if (head.x < EM) this.vx += (EM - head.x) * 0.08;
+      if (head.x > W - EM) this.vx += (W - EM - head.x) * 0.08;
+      if (head.y < EM) this.vy += (EM - head.y) * 0.08;
+      if (head.y > H - EM) this.vy += (H - EM - head.y) * 0.08;
 
       const ax = (targetX - head.x) * 0.028;
       const ay = (targetY - head.y) * 0.028;
