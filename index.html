@@ -837,6 +837,78 @@ function render(now) {
 }
 requestAnimationFrame(render);
 
+const orbitCanvas = document.createElement('canvas');
+orbitCanvas.style.cssText = 'position:fixed;top:0;left:0;pointer-events:none;z-index:6;';
+document.body.appendChild(orbitCanvas);
+const octx = orbitCanvas.getContext('2d');
+
+function resizeOrbitCanvas() {
+  orbitCanvas.width  = window.innerWidth;
+  orbitCanvas.height = window.innerHeight;
+}
+resizeOrbitCanvas();
+window.addEventListener('resize', resizeOrbitCanvas);
+
+let orbitLabelAngle = Math.PI * 1.12;
+
+function drawOrbit(now) {
+  requestAnimationFrame(drawOrbit);
+
+  const ease  = transitionT * transitionT * (3 - 2 * transitionT);
+  const alpha = Math.max(0, 1 - ease);
+
+  const W = orbitCanvas.width, H = orbitCanvas.height;
+  octx.clearRect(0, 0, W, H);
+  if (alpha < 0.004) return;
+
+  orbitLabelAngle += 0.004;
+  if (orbitLabelAngle > Math.PI * 2) orbitLabelAngle -= Math.PI * 2;
+
+  const cx = W / 2, cy = H / 2;
+  const S  = Math.min(W, H, Math.round(660 / 2.5));
+  const R  = S / 2;
+
+  const rx      = R * 1.48;
+  const ry      = R * 0.33;
+  const tiltRad = -13 * Math.PI / 180;
+  const cosT    = Math.cos(tiltRad);
+  const sinT    = Math.sin(tiltRad);
+
+  octx.save();
+  octx.translate(cx, cy);
+  octx.rotate(tiltRad);
+  octx.beginPath();
+  octx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+  octx.strokeStyle = `rgba(90,210,150,${0.10 * alpha})`;
+  octx.lineWidth = 4;
+  octx.stroke();
+  octx.beginPath();
+  octx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+  octx.strokeStyle = `rgba(150,235,185,${0.30 * alpha})`;
+  octx.lineWidth = 0.75;
+  octx.stroke();
+  octx.restore();
+
+  const ang = orbitLabelAngle;
+  const ex  = rx * Math.cos(ang);
+  const ey  = ry * Math.sin(ang);
+
+  const px = cx + ex * cosT - ey * sinT;
+  const py = cy + ex * sinT + ey * cosT;
+
+  const depthAlpha = 0.45 + 0.45 * (0.5 + 0.5 * Math.sin(ang));
+
+  octx.font            = 'italic 12px Georgia, serif';
+  octx.textAlign       = 'center';
+  octx.textBaseline    = 'middle';
+  octx.shadowColor     = `rgba(60,200,130,${depthAlpha * 0.55 * alpha})`;
+  octx.shadowBlur      = 9;
+  octx.fillStyle       = `rgba(175,245,205,${depthAlpha * 0.85 * alpha})`;
+  octx.fillText('Grades', px, py);
+  octx.shadowBlur      = 0;
+}
+requestAnimationFrame(drawOrbit);
+
 </script>
 </body>
 </html>
