@@ -9,7 +9,7 @@
     display: flex; align-items: center; justify-content: center; overflow: hidden; }
   #container { position: relative; z-index: 4; }
   canvas { display: block; }
-  #c { opacity: 0; transition: opacity 0.4s ease; }
+  #c { opacity: 0; transition: opacity 0.08s; }
   #three-canvas { position: fixed; top: 0; left: 0; pointer-events: none; z-index: 1; }
   #particle-canvas { position: fixed; top: 0; left: 0; pointer-events: none; z-index: 3; }
 </style>
@@ -51,6 +51,7 @@ const fsSource = `
   uniform float u_rotX;
   uniform float u_rotY;
   uniform float u_time;
+  uniform float u_glitch;
   varying vec2 v_uv;
 
   const float COLS      = 12.0;
@@ -99,6 +100,15 @@ const fsSource = `
     float barrel = 1.0 - 0.08 * r2 - 0.05 * r2 * r2;
     vec2  sph    = ndc * barrel;
 
+    float gBandIdx  = floor(v_uv.y * 22.0 + u_time * 16.0 * u_glitch);
+    float gBandHash = fract(sin(gBandIdx * 127.1 + floor(u_time * 24.0 * u_glitch) * 0.71) * 43758.5);
+    float gBandOn   = step(0.82, gBandHash) * u_glitch;
+    float gGlobIdx  = floor(u_time * 7.0 * u_glitch);
+    float gGlobHash = fract(sin(gGlobIdx * 83.5) * 43758.5);
+    float gGlobOn   = step(0.80, gGlobHash) * u_glitch;
+    sph.x += (fract(gBandHash * 9.3) * 2.0 - 1.0) * 0.10 * gBandOn;
+    sph.x += (fract(gGlobHash * 7.1) * 2.0 - 1.0) * 0.05 * gGlobOn;
+
     vec2 uvBase = sph + vec2(u_rotY * 0.038, -u_rotX * 0.038);
     vec2 uvFar  = sph + vec2(u_rotY * 0.018, -u_rotX * 0.018);
 
@@ -112,14 +122,14 @@ const fsSource = `
     float layerBlend = smoothstep(0.05, 0.35, nearLum);
     vec4 color = mix(colFar, colNear, layerBlend);
 
-    float aberr  = fresnel * 0.012;
+    float aberr  = fresnel * 0.012 + u_glitch * 0.04;
     vec2 aberrDir = ndc * aberr;
     vec2 uvR = vec2(SPHERE_CX, SPHERE_CY) + (sph + aberrDir * u_rotY * 0.1 + aberrDir) * SPHERE_R;
     vec2 uvB = vec2(SPHERE_CX, SPHERE_CY) + (sph - aberrDir * u_rotY * 0.1 - aberrDir) * SPHERE_R;
     float rChan  = sampleInterp(u_f_exact, uvR).r;
     float bChan  = sampleInterp(u_f_exact, uvB).b;
-    color.r = mix(color.r, rChan, 0.6 * fresnel);
-    color.b = mix(color.b, bChan, 0.6 * fresnel);
+    color.r = mix(color.r, rChan, min(1.0, 0.6 * fresnel + u_glitch * 0.5));
+    color.b = mix(color.b, bChan, min(1.0, 0.6 * fresnel + u_glitch * 0.5));
 
     color.rgb *= mix(0.55, 1.0, diff) * mix(0.7, 1.0, edgeDark);
 
@@ -136,6 +146,14 @@ const fsSource = `
 
     float mask = smoothstep(1.0, 0.975, dist);
     color.a = mask;
+
+    float scan = 0.78 + 0.22 * step(0.5, fract(gl_FragCoord.y * 0.5));
+    color.rgb *= mix(1.0, scan, u_glitch * u_glitch);
+    float flickT = floor(u_time * 26.0 * u_glitch + 0.5);
+    float flick  = 1.0 + 0.28 * (fract(sin(flickT * 37.3) * 43758.5) * 2.0 - 1.0) * u_glitch;
+    color.rgb   *= max(0.4, flick);
+    float lum = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+    color.rgb  = mix(color.rgb, vec3(lum) * 1.3, u_glitch * 0.35);
 
     gl_FragColor = color;
   }
@@ -175,6 +193,7 @@ const uFExact = gl.getUniformLocation(prog, 'u_f_exact');
 const uRotX   = gl.getUniformLocation(prog, 'u_rotX');
 const uRotY   = gl.getUniformLocation(prog, 'u_rotY');
 const uTime   = gl.getUniformLocation(prog, 'u_time');
+const uGlitch = gl.getUniformLocation(prog, 'u_glitch');
 
 const tex = gl.createTexture();
 gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -249,6 +268,7 @@ async function loadKTX2(url) {
     gl.texParameterf(gl.TEXTURE_2D, af.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(max, 8));
   }
   canvas.style.opacity = '1';
+  glitchStartTime = performance.now();
 }
 
 loadKTX2('sprite.ktx2').catch(e => console.error(e));
@@ -256,6 +276,11 @@ loadKTX2('sprite.ktx2').catch(e => console.error(e));
 let transitionT      = 0;
 let transitionTarget = 0;
 let cooldown         = false;
+
+let glitch          = 0;
+let glitchStartTime = null;
+let jitterX         = 0;
+let lastJitterTime  = 0;
 
 function go(dir) {
   if (cooldown) return;
@@ -824,7 +849,28 @@ function render(now) {
   const fExact = p2 <= N ? p2 : cycle - p2;
 
   const dropEase = transitionT * transitionT * (3 - 2 * transitionT);
-  container.style.transform = 'translateY(' + (dropEase * SPHERE_DROP_PX) + 'px)';
+
+  if (glitchStartTime !== null) {
+    const elapsed = now - glitchStartTime;
+    if (elapsed >= 1200) {
+      glitch = 0;
+    } else if (elapsed < 400) {
+      glitch = 1.0;
+    } else {
+      const ramp = (elapsed - 400) / 800;
+      glitch = 1.0 - ramp * ramp;
+    }
+    if (glitch > 0.05) {
+      if (now - lastJitterTime > 45 + Math.random() * 45) {
+        jitterX = (Math.random() - 0.5) * 6 * glitch;
+        lastJitterTime = now;
+      }
+    } else {
+      jitterX = 0;
+    }
+  }
+
+  container.style.transform = 'translateY(' + (dropEase * SPHERE_DROP_PX) + 'px) translateX(' + jitterX.toFixed(1) + 'px)';
 
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.clearColor(0, 0, 0, 0);
@@ -833,6 +879,7 @@ function render(now) {
   gl.uniform1f(uRotX,   0.0);
   gl.uniform1f(uRotY,   0.0);
   gl.uniform1f(uTime,   now / 1000);
+  gl.uniform1f(uGlitch, glitch);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
 requestAnimationFrame(render);
