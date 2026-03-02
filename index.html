@@ -182,7 +182,7 @@ gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0,15,8,255]));
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.TEXTURE_2D, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0,15,8,255]));
 
 function loadScript(src) {
   return new Promise((res, rej) => {
@@ -837,32 +837,64 @@ function render(now) {
 }
 requestAnimationFrame(render);
 
-const orbitCanvas = document.createElement('canvas');
-orbitCanvas.style.cssText = 'position:fixed;top:0;left:0;pointer-events:none;z-index:6;';
-document.body.appendChild(orbitCanvas);
-const octx = orbitCanvas.getContext('2d');
+const orbitCanvasBack  = document.createElement('canvas');
+const orbitCanvasFront = document.createElement('canvas');
+orbitCanvasBack.style.cssText  = 'position:fixed;top:0;left:0;pointer-events:none;z-index:2;';
+orbitCanvasFront.style.cssText = 'position:fixed;top:0;left:0;pointer-events:none;z-index:5;';
+document.body.appendChild(orbitCanvasBack);
+document.body.appendChild(orbitCanvasFront);
+const octxBack  = orbitCanvasBack.getContext('2d');
+const octxFront = orbitCanvasFront.getContext('2d');
+
+const orbitCanvas = orbitCanvasFront;
+const octx        = octxFront;
 
 function resizeOrbitCanvas() {
-  orbitCanvas.width  = window.innerWidth;
-  orbitCanvas.height = window.innerHeight;
+  orbitCanvasBack.width   = window.innerWidth;
+  orbitCanvasBack.height  = window.innerHeight;
+  orbitCanvasFront.width  = window.innerWidth;
+  orbitCanvasFront.height = window.innerHeight;
 }
 resizeOrbitCanvas();
 window.addEventListener('resize', resizeOrbitCanvas);
 
 let orbitLabelAngle = Math.PI * 1.12;
 
+const LINE_DRAW_MS  = 1400;
+let   lineStartTime = null;
+let   lineProgress  = 0;
+let   labelAlpha    = 0;
+let   prevTransitionTarget = 0;
+
+function easeInOut(t) {
+  return t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
+}
+
 function drawOrbit(now) {
   requestAnimationFrame(drawOrbit);
+
+  if (transitionTarget === 0 && prevTransitionTarget === 1) {
+    lineStartTime = now;
+    lineProgress  = 0;
+    labelAlpha    = 0;
+  }
+  prevTransitionTarget = transitionTarget;
+
+  if (lineStartTime === null) lineStartTime = now;
+  const rawP = Math.min((now - lineStartTime) / LINE_DRAW_MS, 1);
+  lineProgress = easeInOut(rawP);
+  labelAlpha = rawP > 0.75 ? Math.min(1, (rawP - 0.75) / 0.25) : 0;
 
   const ease  = transitionT * transitionT * (3 - 2 * transitionT);
   const alpha = Math.max(0, 1 - ease);
 
-  const W = orbitCanvas.width, H = orbitCanvas.height;
-  octx.clearRect(0, 0, W, H);
+  const W = orbitCanvasBack.width, H = orbitCanvasBack.height;
+  octxBack.clearRect(0, 0, W, H);
+  octxFront.clearRect(0, 0, W, H);
   if (alpha < 0.004) return;
 
-  orbitLabelAngle += 0.004;
-  if (orbitLabelAngle > Math.PI * 2) orbitLabelAngle -= Math.PI * 2;
+  orbitLabelAngle -= 0.004;
+  if (orbitLabelAngle < 0) orbitLabelAngle += Math.PI * 2;
 
   const cx = W / 2, cy = H / 2;
   const S  = Math.min(W, H, Math.round(660 / 2.5));
@@ -874,39 +906,117 @@ function drawOrbit(now) {
   const cosT    = Math.cos(tiltRad);
   const sinT    = Math.sin(tiltRad);
 
-  octx.save();
-  octx.translate(cx, cy);
-  octx.rotate(tiltRad);
-  octx.beginPath();
-  octx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
-  octx.strokeStyle = `rgba(90,210,150,${0.10 * alpha})`;
-  octx.lineWidth = 4;
-  octx.stroke();
-  octx.beginPath();
-  octx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
-  octx.strokeStyle = `rgba(150,235,185,${0.30 * alpha})`;
-  octx.lineWidth = 0.75;
-  octx.stroke();
-  octx.restore();
+  const STEPS = 300;
+  const totalAngle = lineProgress * Math.PI * 2;
 
-  const ang = orbitLabelAngle;
-  const ex  = rx * Math.cos(ang);
-  const ey  = ry * Math.sin(ang);
+  if (lineProgress > 0.005) {
+    const pts = [];
+    for (let i = 0; i <= STEPS; i++) {
+      const a  = -(i / STEPS) * totalAngle;
+      pts.push({ a, ex: rx * Math.cos(a), ey: ry * Math.sin(a) });
+    }
 
-  const px = cx + ex * cosT - ey * sinT;
-  const py = cy + ex * sinT + ey * cosT;
+    function drawHalf(ctx, pts, isBack) {
+      const glowC = `rgba(90,210,150,${0.10 * alpha})`;
+      const lineC = `rgba(150,235,185,${0.30 * alpha})`;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(tiltRad);
 
-  const depthAlpha = 0.45 + 0.45 * (0.5 + 0.5 * Math.sin(ang));
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = glowC;
+      let inPath = false;
+      ctx.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        const belongs = isBack ? (p.ey < 0) : (p.ey >= 0);
+        const onBoundary = Math.abs(p.ey) < (ry * 0.04);
+        if (belongs || onBoundary) {
+          if (!inPath) { ctx.moveTo(p.ex, p.ey); inPath = true; }
+          else ctx.lineTo(p.ex, p.ey);
+        } else {
+          if (inPath) { ctx.stroke(); ctx.beginPath(); inPath = false; }
+        }
+      }
+      if (inPath) ctx.stroke();
 
-  octx.font            = 'italic 12px Georgia, serif';
-  octx.textAlign       = 'center';
-  octx.textBaseline    = 'middle';
-  octx.shadowColor     = `rgba(60,200,130,${depthAlpha * 0.55 * alpha})`;
-  octx.shadowBlur      = 9;
-  octx.fillStyle       = `rgba(175,245,205,${depthAlpha * 0.85 * alpha})`;
-  octx.fillText('Grades', px, py);
-  octx.shadowBlur      = 0;
+      ctx.lineWidth = 0.75;
+      ctx.strokeStyle = lineC;
+      inPath = false;
+      ctx.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        const belongs = isBack ? (p.ey < 0) : (p.ey >= 0);
+        const onBoundary = Math.abs(p.ey) < (ry * 0.04);
+        if (belongs || onBoundary) {
+          if (!inPath) { ctx.moveTo(p.ex, p.ey); inPath = true; }
+          else ctx.lineTo(p.ex, p.ey);
+        } else {
+          if (inPath) { ctx.stroke(); ctx.beginPath(); inPath = false; }
+        }
+      }
+      if (inPath) ctx.stroke();
+
+      ctx.restore();
+    }
+
+    drawHalf(octxBack,  pts, true);
+    drawHalf(octxFront, pts, false);
+  }
+
+  if (labelAlpha > 0.01) {
+    const ang = orbitLabelAngle;
+    const ex  = rx * Math.cos(ang);
+    const ey  = ry * Math.sin(ang);
+    const px  = cx + ex * cosT - ey * sinT;
+    const py  = cy + ex * sinT + ey * cosT;
+
+    const depthA  = 0.45 + 0.45 * (0.5 + 0.5 * Math.sin(ang));
+    const finalA  = labelAlpha * depthA * alpha;
+    if (finalA < 0.01) return;
+
+    const tx_local = rx * Math.sin(ang);
+    const ty_local = -ry * Math.cos(ang);
+    const tx_world = tx_local * cosT - ty_local * sinT;
+    const ty_world = tx_local * sinT + ty_local * cosT;
+    let pillAngle = Math.atan2(ty_world, tx_world);
+    if (pillAngle > Math.PI / 2 || pillAngle < -Math.PI / 2) pillAngle += Math.PI;
+
+    const TEXT      = 'Grades';
+    const FONT_SIZE = 12;
+    const lctx = (ey < 0) ? octxBack : octxFront;
+    lctx.font = `600 ${FONT_SIZE}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    const textW = lctx.measureText(TEXT).width;
+    const padY  = 6, boxH = FONT_SIZE + padY * 2, padX = boxH / 2, boxW = textW + padX * 2;
+
+    lctx.save();
+    lctx.globalAlpha = finalA;
+    lctx.translate(px, py);
+    lctx.rotate(pillAngle);
+    lctx.beginPath(); pill(lctx, -boxW/2, -boxH/2, boxW, boxH);
+    lctx.fillStyle = 'rgb(28,72,48)'; lctx.fill();
+    lctx.beginPath(); pill(lctx, -boxW/2, -boxH/2, boxW, boxH);
+    lctx.strokeStyle = 'rgba(80,160,110,0.70)'; lctx.lineWidth = 1; lctx.stroke();
+    lctx.font = `600 ${FONT_SIZE}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    lctx.textAlign = 'center'; lctx.textBaseline = 'middle';
+    lctx.fillStyle = 'rgb(255,255,255)';
+    lctx.shadowColor = 'rgba(160,255,210,0.35)'; lctx.shadowBlur = 5;
+    lctx.fillText(TEXT, 0, 0);
+    lctx.shadowBlur = 0;
+    lctx.restore();
+  }
 }
+
+function pill(ctx, x, y, w, h) {
+  const r = h / 2;
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arc(x + w - r, y + r, r, -Math.PI / 2, Math.PI / 2);
+  ctx.lineTo(x + r, y + h);
+  ctx.arc(x + r, y + r, r, Math.PI / 2, -Math.PI / 2);
+  ctx.closePath();
+}
+
 requestAnimationFrame(drawOrbit);
 
 </script>
