@@ -361,13 +361,8 @@ const NUM_DRAGONS       = 12;
 const SEG_COUNT         = 15;
 const SEG_DIST          = 20;
 const PARTICLES_PER_SEG = 22;
-const MOUSE_REPEL_R     = 140;
+const MOUSE_REPEL_R     = 28;
 const MOUSE_REPEL_STR   = 4.5;
-
-// ── Общий ураган ──────────────────────────────────────────
-// Все дракончики вращаются вокруг одного центра (низ экрана),
-// постепенно поднимаясь и сужая радиус — как настоящий торнадо.
-// Каждый дракон смещён по фазе (angle offset) чтобы не накладываться.
 
 class Dragon {
   constructor(id) {
@@ -379,37 +374,19 @@ class Dragon {
     const W = pCanvas.width;
     const H = pCanvas.height;
 
-    // Центр воронки урагана — низ экрана, примерно на 85%
-    // Он общий для всех дракончиков (задаётся глобально)
-    // Каждый дракон просто знает свою фазу смещения
     this.phaseOffset = (this.id / NUM_DRAGONS) * Math.PI * 2;
-
-    // Начальный угол = смещение фазы
     this.angle = this.phaseOffset;
-
-    // Начальный радиус — широкий, как нижняя часть воронки торнадо
-    // Снизу широко, сверху узко
     this.tornadoProgress = 0.05 + (this.id / NUM_DRAGONS) * 0.55 + Math.random() * 0.1;
     this.fadeIn = 0;
-
-    // Скорость вращения (все в одну сторону — это ураган!)
-    this.angularSpeed = 0.045 + this.id * 0.004; // чуть разная скорость для органичности
-
-    // Скорость подъёма по воронке
+    this.angularSpeed = 0.045 + this.id * 0.004;
     this.riseSpeed = 0.0028 + Math.random() * 0.001;
 
-    // Стартовая позиция — все начинают снизу
     const tornadoCX = W * 0.5;
-    const tornadoBaseY = H + 60; // основание воронки за нижним краем
-    const tornadoTopY  = H * 0.42; // вершина воронки — середина экрана
-
-    // Радиус воронки: снизу широкий, сверху узкий (конус)
+    const tornadoBaseY = H + 60;
+    const tornadoTopY  = H * 0.42;
     const baseRadius = Math.min(W, H) * 0.45;
-    const topRadius  = Math.min(W, H) * 0.08;
-
-    const r = baseRadius; // стартовый радиус
+    const r = baseRadius;
     const startX = tornadoCX + Math.cos(this.angle) * r;
-    // Стартовая позиция — уже в воздухе в воронке
     const initP = this.tornadoProgress;
     const initEasedP = initP * initP * (3 - 2 * initP);
     const startY = tornadoBaseY + (tornadoTopY - tornadoBaseY) * initEasedP;
@@ -444,20 +421,16 @@ class Dragon {
     this.vy    = 0;
     this.risen = false;
 
-    // После того как дракон вышел из воронки — орбита
-    // Частицы облака разлетаются ~90px от головы — держим такой отступ от краёв
     const EDGE_MARGIN = 95;
-    // Орбитальный радиус — от маленького до большого, равномерно по драконам
     const orbitBand = 0.08 + (this.id / NUM_DRAGONS) * 0.36;
     this.orbitR = Math.min(W, H) * (orbitBand + Math.random() * 0.06);
-    // Центр орбиты выбирается так чтобы голова + облако не выходили за край
     const maxCX = W - EDGE_MARGIN - this.orbitR;
     const minCX = EDGE_MARGIN + this.orbitR;
     const maxCY = H - EDGE_MARGIN - this.orbitR * 0.5;
     const minCY = EDGE_MARGIN + this.orbitR * 0.5;
     this.orbitCX = Math.max(minCX, Math.min(maxCX, W * 0.5 + (Math.random() - 0.5) * (W - 2*(EDGE_MARGIN + this.orbitR))));
     this.orbitCY_val = Math.max(minCY, Math.min(maxCY, H * 0.5 + (Math.random() - 0.5) * (H - 2*(EDGE_MARGIN + this.orbitR * 0.5))));
-    this.orbitDir   = 1; // все продолжают крутиться в ту же сторону
+    this.orbitDir   = 1;
     this.orbitSpd   = (0.0018 + Math.random() * 0.001) * this.orbitDir;
     this.orbitAngle = this.angle;
     this.orbitCX    = tornadoCX;
@@ -470,42 +443,29 @@ class Dragon {
     const head = this.segs[0];
 
     if (!this.risen) {
-      // ── УРАГАН: воронка торнадо ──
-      // Прогресс подъёма: 0 (низ) → 1 (середина)
       this.tornadoProgress += this.riseSpeed * dt * 60;
       this.fadeIn = Math.min(1, this.fadeIn + dt * 2.5);
       if (this.tornadoProgress > 1) this.tornadoProgress = 1;
 
       const p = this.tornadoProgress;
-
-      // Центр воронки — вертикальная ось торнадо
       const tornadoCX   = W * 0.5;
       const tornadoBaseY = H + 60;
       const tornadoTopY  = H * 0.42;
-
-      // Текущая высота (Y уменьшается при подъёме)
-      // Используем ease-in чтобы сначала медленно, потом быстрее
-      const easedP  = p * p * (3 - 2 * p); // smoothstep
+      const easedP  = p * p * (3 - 2 * p);
       const currentY = tornadoBaseY + (tornadoTopY - tornadoBaseY) * easedP;
-
-      // Радиус воронки сужается снизу вверх (конус торнадо)
-      // Радиус всегда одинаковый — цилиндр, а не конус
       const currentR = Math.min(W * 0.52, H * 0.52);
 
       this.angle += this.angularSpeed * dt * 60;
 
-      // Целевая позиция по воронке
       const targetX = tornadoCX + Math.cos(this.angle) * currentR;
       const targetY = currentY;
 
-      // Плавное следование с инерцией
       const followK = 0.14;
       this.vx = (targetX - head.x) * followK;
       this.vy = (targetY - head.y) * followK;
       head.x += this.vx;
       head.y += this.vy;
 
-      // Переход в орбиту когда достигли вершины воронки
       if (this.tornadoProgress >= 1.0) {
         this.risen      = true;
         this.orbitAngle = this.angle;
@@ -518,12 +478,10 @@ class Dragon {
       }
 
     } else {
-      // ── Орбитальное движение ──
       this.orbitAngle += this.orbitSpd * dt * 60;
 
       const targetX = this.orbitCX + Math.cos(this.orbitAngle) * this.orbitR;
       const targetY = this.orbitCY + Math.sin(this.orbitAngle) * this.orbitR * 0.5;
-      // Мягко отталкиваем от краёв если вдруг вышли
       const EM = 95;
       if (head.x < EM) this.vx += (EM - head.x) * 0.08;
       if (head.x > W - EM) this.vx += (W - EM - head.x) * 0.08;
@@ -554,7 +512,6 @@ class Dragon {
       head.y += this.vy;
     }
 
-    // Хвост тянется за головой
     for (let i = 1; i < SEG_COUNT; i++) {
       const prev = this.segs[i - 1];
       const curr = this.segs[i];
@@ -595,8 +552,8 @@ class Dragon {
           const pdx = baseX - mouse.x;
           const pdy = baseY - mouse.y;
           const pd  = Math.sqrt(pdx * pdx + pdy * pdy) + 0.1;
-          if (pd < 160) {
-            const t2  = 1 - pd / 160;
+          if (pd < 32) {
+            const t2  = 1 - pd / 32;
             const str = t2 * t2 * 7.5;
             pt.vox += (pdx / pd) * str;
             pt.voy += (pdy / pd) * str;
