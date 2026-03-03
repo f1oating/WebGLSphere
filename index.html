@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <title>Sphere</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&display=swap">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; background: #000;
@@ -1052,13 +1054,13 @@ function drawOrbit(now) {
     if (pillAngle > Math.PI / 2 || pillAngle < -Math.PI / 2) pillAngle += Math.PI;
 
     const TEXT      = 'Grades';
-    const FONT_SIZE = 12;
+    const FONT_SIZE = 16;
     const lctx = (ey < 0) ? octxBack : octxFront;
-    lctx.font = `600 ${FONT_SIZE}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    lctx.font = `${FONT_SIZE}px "Instrument Serif", Georgia, serif`;
+    lctx.letterSpacing = '-0.48px';
     const textW = lctx.measureText(TEXT).width;
     const padY  = 6, boxH = FONT_SIZE + padY * 2, padX = boxH / 2, boxW = textW + padX * 2;
 
-    // Sample background canvases for real backdrop-blur effect
     const dropE   = transitionT * transitionT * (3 - 2 * transitionT);
     const sphLeft = W / 2 - SIZE / 2;
     const sphTop  = H / 2 - SIZE / 2 + dropE * SPHERE_DROP_PX;
@@ -1078,24 +1080,22 @@ function drawOrbit(now) {
     lctx.translate(px, py);
     lctx.rotate(pillAngle);
 
-    // Backdrop blur clipped to pill
     lctx.save();
     lctx.beginPath(); pill(lctx, -boxW/2, -boxH/2, boxW, boxH);
     lctx.clip();
-    lctx.rotate(-pillAngle); // align sample to screen space
+    lctx.rotate(-pillAngle);
     lctx.filter = 'blur(16px)';
     lctx.drawImage(bdC, -sampleR, -sampleR, bdSz, bdSz);
     lctx.filter = 'none';
-    lctx.fillStyle = 'rgba(255,255,255,0.08)'; // frosted glass tint
+    lctx.fillStyle = 'rgba(255,255,255,0.08)';
     lctx.fillRect(-sampleR, -sampleR, bdSz, bdSz);
     lctx.restore();
 
-    // Border
     lctx.beginPath(); pill(lctx, -boxW/2, -boxH/2, boxW, boxH);
     lctx.strokeStyle = 'rgba(255,255,255,0.28)'; lctx.lineWidth = 1.1; lctx.stroke();
 
-    // Text
-    lctx.font = `italic 600 ${FONT_SIZE}px Georgia, "Times New Roman", serif`;
+    lctx.font = `16px "Instrument Serif", Georgia, serif`;
+    lctx.letterSpacing = '-0.48px';
     lctx.textAlign = 'center'; lctx.textBaseline = 'middle';
     lctx.fillStyle = 'rgba(255,255,255,0.95)';
     lctx.shadowColor = 'rgba(200,255,230,0.5)'; lctx.shadowBlur = 3;
